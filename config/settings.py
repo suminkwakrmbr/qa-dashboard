@@ -32,6 +32,9 @@ class Settings(BaseSettings):
     # 암호화 설정
     ENCRYPTION_KEY: str = config("ENCRYPTION_KEY", default="your-32-character-encryption-key")
     
+    # GPT API 설정
+    CUSTOM_GPT_API_KEY: str = config("CUSTOM_GPT_API_KEY", default="")
+    
     # API 설정
     API_V1_STR: str = "/api/v1"
     PROJECT_NAME: str = "QA Dashboard"

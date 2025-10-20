@@ -19,10 +19,13 @@ def get_current_selection_count(project_key: str, issues: List[Dict[str, Any]]) 
     if not issues:
         return 0
     
-    return sum(
-        1 for issue in issues
-        if st.session_state.get(f"issue_select_{project_key}_{issue.get('key', '')}", False)
-    )
+    # 세션 상태에서 선택된 키들만 직접 카운트 (더 정확함)
+    selected_count = 0
+    for key in st.session_state.keys():
+        if key.startswith(f"issue_select_{project_key}_") and st.session_state[key]:
+            selected_count += 1
+    
+    return selected_count
 
 def should_select_all_be_checked(project_key: str, issues: List[Dict[str, Any]]) -> bool:
     """전체 선택 체크박스가 체크되어야 하는지 판단"""
@@ -204,21 +207,21 @@ def display_project_card(col, project: Dict[str, Any]):
                 
                 if sync_state in ["starting", "connecting", "fetching_issues", "processing"]:
                     if total_issues > 0:
-                        sync_status_info = f'<p style="margin: 0; color: #f59e0b; font-size: 0.8rem;">🔄 동기화 진행 중... ({processed_issues}/{total_issues}, {sync_progress}%)</p>'
+                        sync_status_info = f"🔄 동기화 진행 중... ({processed_issues}/{total_issues}, {sync_progress}%)"
                     else:
-                        sync_status_info = f'<p style="margin: 0; color: #f59e0b; font-size: 0.8rem;">🔄 동기화 진행 중... ({sync_progress}%)</p>'
+                        sync_status_info = f"🔄 동기화 진행 중... ({sync_progress}%)"
                     sync_button_disabled = True
                 elif sync_state == "completed":
                     if total_issues > 0:
-                        sync_status_info = f'<p style="margin: 0; color: #10b981; font-size: 0.8rem;">✅ 동기화 완료 ({processed_issues}/{total_issues})</p>'
+                        sync_status_info = f"✅ 동기화 완료 ({processed_issues}/{total_issues})"
                     else:
-                        sync_status_info = f'<p style="margin: 0; color: #10b981; font-size: 0.8rem;">✅ 동기화 완료</p>'
+                        sync_status_info = f"✅ 동기화 완료"
                 elif sync_state == "error":
                     error_message = sync_status.get('message', '동기화 실패')
                     # 에러 메시지가 너무 길면 축약
                     if len(error_message) > 50:
                         error_message = error_message[:47] + "..."
-                    sync_status_info = f'<p style="margin: 0; color: #ef4444; font-size: 0.8rem;" title="{sync_status.get("message", "")}">❌ {error_message}</p>'
+                    sync_status_info = f"❌ {error_message}"
         except Exception as e:
             # 동기화 상태 조회 실패 시 로그만 남기고 무시
             logger.warning(f"동기화 상태 조회 실패 ({project_key}): {str(e)}")
@@ -299,79 +302,125 @@ def sync_project(project_key: str):
     except Exception as e:
         st.error(f"❌ 예상치 못한 오류: {str(e)}")
 
+@st.dialog("동기화 진행 상황")
+def sync_progress_modal(project_key: str):
+    """동기화 진행 상황 모달 - 심플하고 고급스러운 디자인"""
+    # 동기화 상태 조회
+    sync_status = get_sync_status(project_key)
+    
+    if not sync_status:
+        st.markdown("⚠️ **동기화 상태를 확인할 수 없습니다.**")
+        st.markdown("상태 확인을 재시도하는 중...")
+        time.sleep(2)
+        st.rerun()
+        return
+    
+    status = sync_status.get('status', 'unknown')
+    progress = sync_status.get('progress', 0)
+    message = sync_status.get('message', '진행 중...')
+    total_issues = sync_status.get('total_issues', 0)
+    processed_issues = sync_status.get('processed_issues', 0)
+    
+    # 메시지에서 불필요한 문구 제거
+    if message:
+        message = message.replace('(고성능 배치 처리)', '').strip()
+        # 연속된 공백 제거
+        import re
+        message = re.sub(r'\s+', ' ', message)
+    
+    # 상태별 아이콘 설정 (심플하게)
+    if status == "starting":
+        status_icon = "●"
+        status_text = "시작 중"
+    elif status == "connecting":
+        status_icon = "●"
+        status_text = "연결 중"
+    elif status == "fetching_issues":
+        status_icon = "●"
+        status_text = "이슈 조회 중"
+    elif status == "processing":
+        status_icon = "●"
+        status_text = "처리 중"
+    elif status == "completed":
+        status_icon = "✓"
+        status_text = "완료"
+    elif status == "error":
+        status_icon = "✗"
+        status_text = "오류"
+    elif status == "not_found":
+        status_icon = "!"
+        status_text = "찾을 수 없음"
+    else:
+        status_icon = "●"
+        status_text = "진행 중"
+    
+    # 심플한 상태 표시
+    if status == "completed":
+        st.markdown(f"**{status_icon} {status_text}**")
+        if total_issues > 0:
+            st.markdown(f"**완료:** {processed_issues}/{total_issues} 이슈 처리됨")
+        else:
+            st.markdown(f"{message}")
+    elif status == "error":
+        st.markdown(f"**{status_icon} {status_text}**")
+        st.markdown(f"{message}")
+    elif status == "not_found":
+        st.markdown(f"**{status_icon} {status_text}**")
+        st.markdown(f"{message}")
+    else:
+        st.markdown(f"**{status_icon} {status_text}**")
+        st.markdown(f"{message}")
+    
+    # 심플한 진행률 표시
+    st.progress(progress / 100.0)
+    st.markdown(f"**진행률:** {progress}%")
+    
+    # 상세 정보 표시 (심플하게)
+    if total_issues > 0 and status == "processing":
+        st.markdown(f"**처리 중:** {processed_issues}/{total_issues} 이슈")
+    
+    # 완료 상태가 아니면 자동 새로고침
+    if status not in ["completed", "error", "not_found"]:
+        st.markdown("---")
+        st.markdown("동기화가 진행 중입니다. 잠시만 기다려주세요...")
+        time.sleep(2)
+        st.rerun()
+    else:
+        # 완료 상태면 확인 버튼 표시
+        st.markdown("---")
+        st.markdown("**동기화가 완료되었습니다. 아래 확인 버튼을 클릭해주세요.**")
+        
+        col1, col2, col3 = st.columns([1, 1, 1])
+        with col2:
+            # 고유한 key 생성을 위해 더 정확한 타임스탬프와 랜덤 값 사용
+            import random
+            unique_id = f"{int(time.time() * 1000)}_{random.randint(1000, 9999)}"
+            
+            if st.button("확인", key=f"sync_complete_{project_key}_{unique_id}", use_container_width=True, type="primary"):
+                # 모달 닫기 - 모든 관련 세션 상태 제거
+                if f"show_sync_modal_{project_key}" in st.session_state:
+                    del st.session_state[f"show_sync_modal_{project_key}"]
+                if f"close_sync_modal_{project_key}" in st.session_state:
+                    del st.session_state[f"close_sync_modal_{project_key}"]
+                st.cache_data.clear()
+                st.rerun()
+
 def monitor_sync_progress(project_key: str):
-    """동기화 진행 상황 실시간 모니터링"""
-    # 진행률 표시를 위한 컨테이너 생성
-    progress_container = st.empty()
-    status_container = st.empty()
+    """동기화 진행 상황 실시간 모니터링 (실제 모달)"""
+    # 세션 상태에 모달 표시 플래그 설정
+    st.session_state[f"show_sync_modal_{project_key}"] = True
     
-    max_attempts = 60  # 최대 60초 대기 (2초 간격)
-    attempt = 0
+    # 모달 표시
+    if st.session_state.get(f"show_sync_modal_{project_key}", False) and not st.session_state.get(f"close_sync_modal_{project_key}", False):
+        sync_progress_modal(project_key)
     
-    while attempt < max_attempts:
-        try:
-            # 동기화 상태 조회
-            sync_status = get_sync_status(project_key)
-            
-            if not sync_status:
-                status_container.warning("⚠️ 동기화 상태를 확인할 수 없습니다.")
-                time.sleep(2)
-                attempt += 1
-                continue
-            
-            status = sync_status.get('status', 'unknown')
-            progress = sync_status.get('progress', 0)
-            message = sync_status.get('message', '진행 중...')
-            total_issues = sync_status.get('total_issues', 0)
-            processed_issues = sync_status.get('processed_issues', 0)
-            
-            # 진행률 바 업데이트
-            with progress_container.container():
-                st.progress(progress / 100.0, text=f"진행률: {progress}%")
-                
-                # 상태별 아이콘과 색상
-                if status == "starting":
-                    st.info(f"🚀 {message}")
-                elif status == "connecting":
-                    st.info(f"🔗 {message}")
-                elif status == "fetching_issues":
-                    st.info(f"📥 {message}")
-                elif status == "processing":
-                    if total_issues > 0:
-                        st.info(f"⚙️ {message} ({processed_issues}/{total_issues})")
-                    else:
-                        st.info(f"⚙️ {message}")
-                elif status == "completed":
-                    st.success(f"✅ {message}")
-                    if total_issues > 0:
-                        st.success(f"📊 총 {total_issues}개 이슈 중 {processed_issues}개 처리 완료")
-                    break
-                elif status == "error":
-                    st.error(f"❌ {message}")
-                    break
-                elif status == "not_found":
-                    st.warning(f"⚠️ {message}")
-                    break
-                else:
-                    st.info(f"🔄 {message}")
-            
-            # 완료 상태면 루프 종료
-            if status in ["completed", "error", "not_found"]:
-                break
-                
-            time.sleep(2)  # 2초 대기
-            attempt += 1
-            
-        except Exception as e:
-            status_container.error(f"❌ 상태 확인 중 오류: {str(e)}")
-            break
-    
-    # 최대 시간 초과
-    if attempt >= max_attempts:
-        status_container.warning("⏰ 동기화 상태 확인 시간이 초과되었습니다. 백그라운드에서 계속 진행됩니다.")
-    
-    # 캐시 클리어 (동기화 완료 후 최신 데이터 반영)
-    st.cache_data.clear()
+    # 확인 버튼 클릭 시 모달 닫기
+    if st.session_state.get(f"close_sync_modal_{project_key}", False):
+        # 모달 관련 플래그 모두 제거
+        if f"show_sync_modal_{project_key}" in st.session_state:
+            del st.session_state[f"show_sync_modal_{project_key}"]
+        if f"close_sync_modal_{project_key}" in st.session_state:
+            del st.session_state[f"close_sync_modal_{project_key}"]
 
 def show_project_statistics():
     """프로젝트 통계"""
@@ -457,10 +506,36 @@ def show_sync_detail_page(project_key: str):
     """동기화 상세 페이지"""
     st.title(f"🔄 {project_key} 프로젝트 동기화")
     
+    # 페이지 첫 진입 시 모든 선택 상태 초기화
+    if f"sync_detail_initialized_{project_key}" not in st.session_state:
+        # 해당 프로젝트의 모든 선택 상태 초기화
+        keys_to_remove = [key for key in st.session_state.keys() if key.startswith(f"issue_select_{project_key}_")]
+        for key in keys_to_remove:
+            del st.session_state[key]
+        # 초기화 완료 플래그 설정
+        st.session_state[f"sync_detail_initialized_{project_key}"] = True
+    
     # 뒤로 가기 버튼 (왼쪽 정렬)
-    if st.button("← 뒤로 가기"):
-        st.session_state.sync_detail_project = None
-        st.rerun()
+    col1, col2, col3 = st.columns([1, 1, 2])
+    with col1:
+        if st.button("← 뒤로 가기"):
+            st.session_state.sync_detail_project = None
+            # 캐시된 이슈 목록도 삭제
+            if f"cached_issues_{project_key}" in st.session_state:
+                del st.session_state[f"cached_issues_{project_key}"]
+            # 초기화 플래그도 삭제
+            if f"sync_detail_initialized_{project_key}" in st.session_state:
+                del st.session_state[f"sync_detail_initialized_{project_key}"]
+            st.rerun()
+    
+    with col2:
+        if st.button("🗑️ 선택 초기화"):
+            # 해당 프로젝트의 모든 선택 상태 초기화
+            keys_to_remove = [key for key in st.session_state.keys() if key.startswith(f"issue_select_{project_key}_")]
+            for key in keys_to_remove:
+                del st.session_state[key]
+            st.success("✅ 모든 선택이 초기화되었습니다.")
+            st.rerun()
     
     st.markdown("---")
     
@@ -473,21 +548,29 @@ def show_sync_detail_page(project_key: str):
             monitor_sync_progress(project_key)
             return
     
-    # 이슈 목록 가져오기 (최대 300개)
-    with st.spinner("이슈 목록을 가져오는 중..."):
-        issues_data = get_jira_project_issues(project_key, limit=300)
+    # 이슈 목록 캐시 확인 (성능 최적화)
+    cache_key = f"cached_issues_{project_key}"
+    if cache_key not in st.session_state:
+        # 이슈 목록 가져오기
+        with st.spinner("이슈 목록을 가져오는 중... (최근 1년)"):
+            issues_data = get_jira_project_issues(project_key, quick=True)
+            
+        if not issues_data or not issues_data.get("success"):
+            st.error(f"❌ 이슈 목록을 가져올 수 없습니다: {issues_data.get('message', '알 수 없는 오류') if issues_data else '연결 실패'}")
+            return
+        
+        # 이슈 목록 캐시에 저장
+        st.session_state[cache_key] = issues_data.get("issues", [])
+        st.success(f"✅ {len(st.session_state[cache_key])}개의 이슈를 찾았습니다.")
+    else:
+        # 캐시된 이슈 목록 사용
+        st.info(f"📋 캐시된 이슈 목록 사용 중: {len(st.session_state[cache_key])}개")
     
-    if not issues_data or not issues_data.get("success"):
-        st.error(f"❌ 이슈 목록을 가져올 수 없습니다: {issues_data.get('message', '알 수 없는 오류') if issues_data else '연결 실패'}")
-        return
-    
-    issues = issues_data.get("issues", [])
+    issues = st.session_state[cache_key]
     
     if not issues:
         st.info("📋 동기화할 이슈가 없습니다.")
         return
-    
-    st.success(f"✅ {len(issues)}개의 이슈를 찾았습니다.")
     
     # 이슈 선택 섹션
     st.subheader("📋 동기화할 이슈 선택")
@@ -504,8 +587,8 @@ def show_sync_detail_page(project_key: str):
         select_all = st.checkbox("전체 선택", value=default_select_all, key=f"select_all_issues_{project_key}")
     
     with col2:
-        if st.button("전체 선택", use_container_width=True):
-            # 모든 이슈 선택
+        if st.button("전체 선택", use_container_width=True, key=f"select_all_btn_{project_key}"):
+            # 모든 이슈 선택 (한 번에 처리)
             for issue in issues:
                 issue_key = issue.get('key', '')
                 if issue_key:
@@ -513,28 +596,31 @@ def show_sync_detail_page(project_key: str):
             st.rerun()
     
     with col3:
-        if st.button("선택 해제", use_container_width=True):
-            # 모든 이슈 선택 해제
-            for issue in issues:
-                issue_key = issue.get('key', '')
-                if f"issue_select_{project_key}_{issue_key}" in st.session_state:
-                    del st.session_state[f"issue_select_{project_key}_{issue_key}"]
+        if st.button("선택 해제", use_container_width=True, key=f"deselect_all_btn_{project_key}"):
+            # 모든 이슈 선택 해제 (한 번에 처리)
+            keys_to_remove = [key for key in st.session_state.keys() if key.startswith(f"issue_select_{project_key}_")]
+            for key in keys_to_remove:
+                del st.session_state[key]
             st.rerun()
     
-    # 전체 선택 체크박스 클릭 시 처리
-    if select_all and currently_selected_count < len(issues):
-        # 전체 선택
-        for issue in issues:
-            issue_key = issue.get('key', '')
-            if issue_key:
-                st.session_state[f"issue_select_{project_key}_{issue_key}"] = True
-        st.rerun()
-    elif not select_all and currently_selected_count > 0 and currently_selected_count == len(issues):
-        # 전체 해제 (모든 이슈가 선택된 상태에서 체크박스를 해제한 경우)
-        for issue in issues:
-            issue_key = issue.get('key', '')
-            if f"issue_select_{project_key}_{issue_key}" in st.session_state:
-                del st.session_state[f"issue_select_{project_key}_{issue_key}"]
+    # 전체 선택 체크박스 클릭 시 처리 (최적화)
+    previous_select_all = st.session_state.get(f"previous_select_all_{project_key}", False)
+    
+    if select_all != previous_select_all:
+        if select_all:
+            # 전체 선택
+            for issue in issues:
+                issue_key = issue.get('key', '')
+                if issue_key:
+                    st.session_state[f"issue_select_{project_key}_{issue_key}"] = True
+        else:
+            # 전체 해제
+            keys_to_remove = [key for key in st.session_state.keys() if key.startswith(f"issue_select_{project_key}_")]
+            for key in keys_to_remove:
+                del st.session_state[key]
+        
+        # 이전 상태 저장
+        st.session_state[f"previous_select_all_{project_key}"] = select_all
         st.rerun()
     
     # 선택 상태 정보 표시
@@ -577,17 +663,22 @@ def show_sync_detail_page(project_key: str):
     
     # 동기화 실행 버튼
     st.markdown("---")
+    
+    # 현재 선택된 이슈 개수를 정확히 계산
+    currently_selected_count = get_current_selection_count(project_key, issues)
+    
+    # 실제 선택된 이슈 키들만 수집
     selected_issues = []
     for issue in issues:
         issue_key = issue.get('key', '')
-        if st.session_state.get(f"issue_select_{project_key}_{issue_key}", False):
+        if issue_key and st.session_state.get(f"issue_select_{project_key}_{issue_key}", False):
             selected_issues.append(issue_key)
     
     col1, col2, col3 = st.columns([1, 2, 1])
     with col2:
-        if selected_issues:
+        if currently_selected_count > 0 and selected_issues:
             if st.button(
-                f"🚀 선택된 {len(selected_issues)}개 이슈 동기화",
+                f"🚀 선택된 {currently_selected_count}개 이슈 동기화",
                 type="primary",
                 use_container_width=True
             ):
@@ -652,7 +743,7 @@ def display_issue_list(project_key: str, issues: List[Dict[str, Any]]):
                 # 체크박스 - 개별 선택/해제
                 checkbox_key = f"issue_select_{project_key}_{issue_key}"
                 is_selected = st.checkbox(
-                    "",
+                    f"선택: {issue_key}" if issue_key else "선택",
                     key=checkbox_key,
                     label_visibility="collapsed"
                 )
@@ -704,21 +795,21 @@ def execute_selective_sync(project_key: str, selected_issues: List[str]):
         st.error("❌ 선택된 이슈가 없습니다.")
         return
     
+    # 실제 선택된 이슈 개수 확인 (중복 제거)
+    unique_selected_issues = list(set(selected_issues))
+    actual_count = len(unique_selected_issues)
+    
     try:
-        with st.spinner(f"선택된 {len(selected_issues)}개 이슈를 동기화하는 중..."):
+        with st.spinner(f"선택된 {actual_count}개 이슈를 동기화하는 중..."):
             # 선택된 이슈만 동기화
-            result = sync_jira_project(project_key, selected_issues)
+            result = sync_jira_project(project_key, unique_selected_issues)
             
             if result and result.get("success"):
                 st.success(f"✅ {result.get('message', '동기화를 시작했습니다.')}")
                 
-                # 실시간 상태 모니터링
+                # 실시간 상태 모니터링 (자동 이동 제거)
                 monitor_sync_progress(project_key)
                 
-                # 동기화 완료 후 메인 페이지로 돌아가기
-                time.sleep(2)
-                st.session_state.sync_detail_project = None
-                st.rerun()
             else:
                 st.error(f"❌ 동기화 시작 실패: {result.get('message', '알 수 없는 오류') if result else '연결 실패'}")
                 

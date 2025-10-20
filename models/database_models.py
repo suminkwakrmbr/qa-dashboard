@@ -176,6 +176,7 @@ class ZephyrProject(Base):
     
     # 관계 설정
     test_cases = relationship("ZephyrTestCase", back_populates="zephyr_project", cascade="all, delete-orphan")
+    test_cycles = relationship("ZephyrTestCycle", back_populates="zephyr_project", cascade="all, delete-orphan")
     sync_histories = relationship("ZephyrSyncHistory", back_populates="zephyr_project", cascade="all, delete-orphan")
     
     def __repr__(self):
@@ -242,6 +243,67 @@ class ZephyrTestExecution(Base):
         return f"<ZephyrTestExecution(id={self.id}, status={self.execution_status}, executed_by={self.executed_by})>"
 
 
+class ZephyrTestCycle(Base):
+    """Zephyr 테스트 사이클 모델"""
+    __tablename__ = "zephyr_test_cycles"
+    
+    id = Column(Integer, primary_key=True, index=True)
+    zephyr_cycle_id = Column(String(50), nullable=False)
+    zephyr_project_id = Column(Integer, ForeignKey("zephyr_projects.id"), nullable=False)
+    cycle_name = Column(String(255), nullable=False)
+    description = Column(Text)
+    version = Column(String(50))
+    environment = Column(String(50))
+    build = Column(String(100))
+    start_date = Column(DateTime(timezone=True))
+    end_date = Column(DateTime(timezone=True))
+    status = Column(String(20), default="Not Started")  # Not Started, In Progress, Completed, Cancelled
+    created_by = Column(String(100))
+    assigned_to = Column(String(100))
+    total_test_cases = Column(Integer, default=0)
+    executed_test_cases = Column(Integer, default=0)
+    passed_test_cases = Column(Integer, default=0)
+    failed_test_cases = Column(Integer, default=0)
+    blocked_test_cases = Column(Integer, default=0)
+    created_at = Column(DateTime(timezone=True), server_default=func.now())
+    updated_at = Column(DateTime(timezone=True), onupdate=func.now())
+    last_sync = Column(DateTime(timezone=True))
+    
+    # 관계 설정
+    zephyr_project = relationship("ZephyrProject", back_populates="test_cycles")
+    cycle_executions = relationship("ZephyrCycleExecution", back_populates="test_cycle", cascade="all, delete-orphan")
+    
+    def __repr__(self):
+        return f"<ZephyrTestCycle(id={self.id}, name={self.cycle_name}, status={self.status})>"
+
+
+class ZephyrCycleExecution(Base):
+    """Zephyr 사이클 실행 결과 모델"""
+    __tablename__ = "zephyr_cycle_executions"
+    
+    id = Column(Integer, primary_key=True, index=True)
+    zephyr_execution_id = Column(String(50), nullable=False)
+    test_cycle_id = Column(Integer, ForeignKey("zephyr_test_cycles.id"), nullable=False)
+    test_case_id = Column(Integer, ForeignKey("zephyr_test_cases.id"), nullable=False)
+    execution_status = Column(String(20), nullable=False)  # Pass, Fail, Blocked, Not Executed, In Progress
+    executed_by = Column(String(100))
+    executed_at = Column(DateTime(timezone=True))
+    execution_time = Column(Integer)  # 실행 소요 시간 (초)
+    comments = Column(Text)
+    defects = Column(Text)  # 연결된 결함 정보
+    attachments = Column(Text)  # 첨부파일 정보 (JSON)
+    created_at = Column(DateTime(timezone=True), server_default=func.now())
+    updated_at = Column(DateTime(timezone=True), onupdate=func.now())
+    last_sync = Column(DateTime(timezone=True))
+    
+    # 관계 설정
+    test_cycle = relationship("ZephyrTestCycle", back_populates="cycle_executions")
+    test_case = relationship("ZephyrTestCase")
+    
+    def __repr__(self):
+        return f"<ZephyrCycleExecution(id={self.id}, status={self.execution_status}, executed_by={self.executed_by})>"
+
+
 class ZephyrSyncHistory(Base):
     """Zephyr 동기화 이력 모델"""
     __tablename__ = "zephyr_sync_history"
@@ -249,7 +311,7 @@ class ZephyrSyncHistory(Base):
     id = Column(Integer, primary_key=True, index=True)
     zephyr_project_id = Column(Integer, ForeignKey("zephyr_projects.id"), nullable=False)
     sync_direction = Column(String(20), nullable=False)  # import, export
-    sync_type = Column(String(50), nullable=False)  # test_cases, executions, both
+    sync_type = Column(String(50), nullable=False)  # test_cases, executions, cycles, both
     sync_status = Column(String(20), default="started")  # started, completed, failed
     total_items = Column(Integer, default=0)
     processed_items = Column(Integer, default=0)

@@ -219,21 +219,25 @@ class JiraService:
             logger.warning(f"프로젝트 {project_key} 이슈 수 조회 실패: {str(e)}")
             return 0
     
-    def get_issues(self, project_key: str, limit: int = None, max_results: int = None) -> List[Dict]:
-        """Jira 이슈 목록 가져오기 - 최대 300개까지 조회"""
+    def get_issues(self, project_key: str, limit: int = None, max_results: int = None, quick_mode: bool = False) -> List[Dict]:
+        """Jira 이슈 목록 가져오기 - 성능 최적화된 조회"""
         if not self.configured:
             return []
         
-        # limit 파라미터가 있으면 우선 사용, 없으면 max_results 사용, 둘 다 없으면 기본값 사용
-        if limit is not None:
-            max_results = limit
+        # quick_mode일 때는 최초 1000개만 빠르게 가져오기
+        if quick_mode:
+            target_limit = 1000
+            logger.info(f"Jira 이슈 조회: 프로젝트 {project_key} (빠른 모드 - 최초 1000개)")
+        elif limit is not None:
+            target_limit = limit
         elif max_results is not None:
-            max_results = max_results
+            target_limit = max_results
         else:
-            max_results = 300  # 기본값을 300으로 설정
+            target_limit = None  # 무제한으로 설정
         
         try:
-            logger.info(f"Jira 이슈 조회: 프로젝트 {project_key} (최근 3개월)")
+            if not quick_mode:
+                logger.info(f"Jira 이슈 조회: 프로젝트 {project_key} (전체 모드)")
             
             # 프로젝트 존재 여부 먼저 확인
             project_exists = self._check_project_exists(project_key)
@@ -241,29 +245,25 @@ class JiraService:
                 logger.error(f"❌ 프로젝트 {project_key}가 존재하지 않거나 접근할 수 없습니다.")
                 return []
             
-            # 3개월 기간 제한을 포함한 JQL 쿼리 (우선순위 순)
+            # 최근 1년치 이슈 조회 (성능 최적화) - 우선순위 순
             jql_queries = [
-                # 3개월 기간 제한 - 기본 쿼리
-                f'project = {project_key} AND updated >= -90d',
-                f'project = "{project_key}" AND updated >= -90d',
+                # 최근 1년 + 최신순 정렬 (가장 효율적)
+                f'project = {project_key} AND updated >= -365d ORDER BY updated DESC',
+                f'project = "{project_key}" AND updated >= -365d ORDER BY updated DESC',
+                f'project = {project_key} AND created >= -365d ORDER BY created DESC',
+                f'project = "{project_key}" AND created >= -365d ORDER BY created DESC',
                 
-                # 3개월 기간 제한 - 생성일 기준
-                f'project = {project_key} AND created >= -90d',
-                f'project = "{project_key}" AND created >= -90d',
+                # 폴백: 6개월 기간 제한
+                f'project = {project_key} AND updated >= -180d ORDER BY updated DESC',
+                f'project = "{project_key}" AND updated >= -180d ORDER BY updated DESC',
                 
-                # 3개월 기간 제한 - 키 기반 검색
-                f'project in ({project_key}) AND updated >= -90d',
-                f'key ~ "{project_key}-*" AND updated >= -90d',
-                
-                # 3개월 기간 제한 - 정렬 추가
+                # 폴백: 3개월 기간 제한
                 f'project = {project_key} AND updated >= -90d ORDER BY updated DESC',
                 f'project = "{project_key}" AND updated >= -90d ORDER BY updated DESC',
-                f'project = {project_key} AND updated >= -90d ORDER BY created DESC',
-                f'project = "{project_key}" AND updated >= -90d ORDER BY created DESC',
                 
-                # 폴백: 1개월 기간 제한 (3개월이 실패할 경우)
-                f'project = {project_key} AND updated >= -30d',
-                f'project = "{project_key}" AND updated >= -30d',
+                # 최종 폴백: 기간 제한 없음 (기존 방식)
+                f'project = {project_key} ORDER BY updated DESC',
+                f'project = "{project_key}" ORDER BY updated DESC',
             ]
             
             last_error_details = None
@@ -272,49 +272,91 @@ class JiraService:
                 try:
                     logger.info(f"JQL 시도 {i+1}: {jql}")
                     
-                    params = {
-                        "jql": jql,
-                        "maxResults": max_results,
-                        "fields": "key,summary,description,status,assignee,priority,created,updated,issuetype,reporter"
-                    }
+                    # 페이지네이션으로 모든 이슈 가져오기
+                    all_issues = []
+                    start_at = 0
+                    page_size = 100  # 한 번에 가져올 페이지 크기
                     
-                    # GET 방식으로 시도 (API v3 사용 - 새로운 엔드포인트)
-                    response = requests.get(
-                        f"{self.server_url}/rest/api/3/search/jql",
-                        headers=self.get_headers(),
-                        params=params,
-                        timeout=settings.JIRA_SYNC_TIMEOUT,
-                        verify=False
-                    )
-                    
-                    # GET 실패 시 POST 방식으로 재시도
-                    if response.status_code == 405:
-                        logger.info(f"GET 방식 실패, POST 방식으로 재시도: {jql}")
-                        post_data = {
+                    while True:
+                        params = {
                             "jql": jql,
-                            "maxResults": max_results,
-                            "fields": ["key", "summary", "description", "status", "assignee", "priority", "created", "updated", "issuetype", "reporter"]
+                            "maxResults": page_size,
+                            "startAt": start_at,
+                            "fields": "key,summary,description,status,assignee,priority,created,updated,issuetype,reporter"
                         }
                         
-                        response = requests.post(
+                        # GET 방식으로 시도 (API v3 사용 - 새로운 엔드포인트)
+                        response = requests.get(
                             f"{self.server_url}/rest/api/3/search/jql",
                             headers=self.get_headers(),
-                            json=post_data,
+                            params=params,
                             timeout=settings.JIRA_SYNC_TIMEOUT,
                             verify=False
                         )
+                        
+                        # GET 실패 시 POST 방식으로 재시도
+                        if response.status_code == 405:
+                            logger.info(f"GET 방식 실패, POST 방식으로 재시도: {jql}")
+                            post_data = {
+                                "jql": jql,
+                                "maxResults": page_size,
+                                "startAt": start_at,
+                                "fields": ["key", "summary", "description", "status", "assignee", "priority", "created", "updated", "issuetype", "reporter"]
+                            }
+                            
+                            response = requests.post(
+                                f"{self.server_url}/rest/api/3/search/jql",
+                                headers=self.get_headers(),
+                                json=post_data,
+                                timeout=settings.JIRA_SYNC_TIMEOUT,
+                                verify=False
+                            )
+                        
+                        logger.info(f"응답 상태: HTTP {response.status_code}")
+                        
+                        if response.status_code == 200:
+                            result = response.json()
+                            page_issues = result.get("issues", [])
+                            total = result.get("total", 0)
+                            
+                            all_issues.extend(page_issues)
+                            logger.info(f"📄 페이지 {start_at//page_size + 1}: {len(page_issues)}개 이슈 조회 (전체 {total}개 중 {len(all_issues)}개 완료)")
+                            
+                            # 더 이상 가져올 이슈가 없으면 종료
+                            if len(page_issues) < page_size:
+                                break
+                            
+                            # total이 정확하고 도달했으면 종료
+                            if total > 0 and len(all_issues) >= total:
+                                break
+                            
+                            # 사용자 제한이 있고 도달했으면 종료
+                            if target_limit and len(all_issues) >= target_limit:
+                                all_issues = all_issues[:target_limit]
+                                logger.info(f"사용자 제한 {target_limit}개에 도달하여 조회 종료")
+                                break
+                            
+                            # 안전장치: 무제한 조회 시 최대 10,000개로 제한
+                            if target_limit is None and len(all_issues) >= 10000:
+                                logger.warning(f"안전장치 발동: 무제한 조회에서 10,000개 도달하여 조회 종료")
+                                break
+                            
+                            start_at += page_size
+                        else:
+                            # 첫 페이지 실패 시 다른 JQL로 시도
+                            if start_at == 0:
+                                break
+                            else:
+                                # 중간 페이지 실패 시 현재까지 수집한 이슈 반환
+                                logger.warning(f"페이지 {start_at//page_size + 1} 조회 실패, 현재까지 {len(all_issues)}개 이슈 반환")
+                                break
                     
-                    logger.info(f"응답 상태: HTTP {response.status_code}")
-                    
-                    if response.status_code == 200:
-                        result = response.json()
-                        raw_issues = result.get("issues", [])
-                        total = result.get("total", 0)
-                        logger.info(f"✅ Jira 이슈 {len(raw_issues)}개 조회 성공 (전체 {total}개)")
+                    if all_issues:
+                        logger.info(f"✅ Jira 이슈 총 {len(all_issues)}개 조회 성공")
                         
                         # 이슈 데이터 정규화
                         normalized_issues = []
-                        for issue in raw_issues:
+                        for issue in all_issues:
                             normalized_issue = self._normalize_issue_data(issue)
                             normalized_issues.append(normalized_issue)
                         

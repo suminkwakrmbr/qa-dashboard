@@ -28,3 +28,15 @@ ENV/
 .DS_Store
 *.db
 *.sqlite3
+
+# Log files
+*.log
+qa_dashboard.log
+
+# JSON data files
+qa_requests.json
+deployment_notice.json
+
+# IDE files
+.vscode/
+.idea/

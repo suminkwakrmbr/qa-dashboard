@@ -13,7 +13,6 @@ sys.path.append(current_dir)
 
 # 모듈 임포트
 from config.settings import PAGE_CONFIG
-from styles.custom_styles import apply_custom_styles
 from api.client import check_api_connection
 
 # 페이지 모듈 임포트
@@ -22,15 +21,14 @@ from page_modules.jira_management import show_jira_management
 from page_modules.jira_project_management import show_jira_project_management
 from page_modules.task_management import show_task_management
 from page_modules.qa_request import show_qa_request
-from page_modules.test_case_management import show_test_case_management
+from page_modules.qa_assistant import show_qa_assistant
 from page_modules.zephyr_management import show_zephyr_management
 from page_modules.admin_management import show_admin_management
 
 # 페이지 설정
 st.set_page_config(**PAGE_CONFIG)
 
-# 스타일 적용
-apply_custom_styles()
+# 커스텀 스타일 제거됨 - 기본 Streamlit 테마 사용
 
 def main():
     """메인 애플리케이션"""
@@ -78,7 +76,7 @@ def main():
     """, unsafe_allow_html=True)
     
     qa_menu_items = [
-        ("🧪 테스트 케이스", "테스트 케이스"),
+        ("🤖 QA AI 어시스턴트", "QA AI 어시스턴트"),
         ("📋 작업 관리", "작업 관리"),
         ("📂 지라 프로젝트 관리", "지라 프로젝트 관리"),
         ("🔗 지라 연동 관리", "지라 연동 관리"),
@@ -180,8 +178,8 @@ def main():
         show_jira_management()
     elif current_page == "작업 관리":
         show_task_management()
-    elif current_page == "테스트 케이스":
-        show_test_case_management()
+    elif current_page == "QA AI 어시스턴트":
+        show_qa_assistant()
     elif current_page == "Zephyr 연동 관리":
         show_zephyr_management()
     elif current_page == "QA 요청서":

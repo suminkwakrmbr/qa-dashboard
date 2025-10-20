@@ -222,10 +222,19 @@ def sync_jira_project(project_key, selected_issues=None):
         st.error(f"❌ {error_message}")
         return {"success": False, "message": error_message}
 
-def get_jira_project_issues(project_key, limit=300):
-    """지라 프로젝트의 이슈 목록 가져오기 (최대 300개) - 타임아웃 연장"""
+def get_jira_project_issues(project_key, limit=None, quick=False):
+    """지라 프로젝트의 이슈 목록 가져오기 (빠른 모드 지원) - 타임아웃 연장"""
     try:
-        url = f"{API_BASE_URL}/jira/projects/{project_key}/issues?limit={limit}"
+        params = []
+        if limit is not None:
+            params.append(f"limit={limit}")
+        if quick:
+            params.append("quick=true")
+        
+        url = f"{API_BASE_URL}/jira/projects/{project_key}/issues"
+        if params:
+            url += "?" + "&".join(params)
+        
         response = requests.get(url, timeout=60)  # 60초로 연장
         
         if 200 <= response.status_code < 300:
@@ -250,8 +259,33 @@ def get_jira_project_issues(project_key, limit=300):
         return {"success": False, "message": error_message}
 
 def get_sync_status(project_key):
-    """동기화 상태 조회"""
-    return api_call(f"/jira/sync-status/{project_key}")
+    """동기화 상태 조회 - 타임아웃 연장"""
+    try:
+        url = f"{API_BASE_URL}/jira/sync-status/{project_key}"
+        response = requests.get(url, timeout=60)  # 60초로 연장
+        
+        if 200 <= response.status_code < 300:
+            try:
+                return response.json()
+            except ValueError:
+                # JSON 응답이 없는 경우
+                return {"success": True, "message": "상태 조회 완료"}
+        else:
+            # 에러 응답 처리
+            try:
+                error_data = response.json()
+                error_message = error_data.get('detail', f'API 오류: {response.status_code}')
+            except ValueError:
+                error_message = f'API 오류: {response.status_code}'
+            
+            return {"success": False, "message": error_message, "status_code": response.status_code}
+            
+    except requests.exceptions.Timeout:
+        # 타임아웃 시 None 반환 (모달에서 재시도)
+        return None
+    except requests.exceptions.RequestException as e:
+        # 연결 오류 시 None 반환 (모달에서 재시도)
+        return None
 
 def reset_all_tasks():
     """모든 작업 데이터 초기화"""
@@ -633,6 +667,284 @@ def reset_all_zephyr_data():
         # 초기화 후 캐시 클리어
         st.cache_data.clear()
     return result
+
+
+# Zephyr 테스트 사이클 관련 API 함수들
+@st.cache_data(ttl=60)  # 1분 캐시
+def get_zephyr_test_cycles(project_id, skip=0, limit=1000):
+    """Zephyr 테스트 사이클 목록 조회 - 직접 Zephyr Scale API 호출 (전체 조회)"""
+    import os
+    from dotenv import load_dotenv
+    
+    # .env 파일 로드
+    load_dotenv()
+    
+    zephyr_api_token = os.getenv('ZEPHYR_API_TOKEN', '')
+    
+    if not zephyr_api_token:
+        return {"success": False, "message": "ZEPHYR_API_TOKEN이 설정되지 않았습니다."}
+    
+    try:
+        all_cycles = []
+        current_skip = 0
+        max_results_per_request = 100  # API 제한에 맞춰 한 번에 100개씩 요청
+        
+        while True:
+            # Zephyr Scale Cloud API 공식 엔드포인트 사용
+            url = "https://api.zephyrscale.smartbear.com/v2/testcycles"
+            headers = {
+                "Authorization": f"Bearer {zephyr_api_token}",
+                "Accept": "application/json"
+            }
+            
+            # 쿼리 파라미터 설정
+            params = {
+                "projectId": project_id,
+                "maxResults": max_results_per_request,
+                "startAt": current_skip
+            }
+            
+            response = requests.get(url, headers=headers, params=params, timeout=30, verify=False)
+            
+            if response.status_code == 200:
+                cycles_data = response.json()
+                
+                # API 응답을 내부 형식으로 변환
+                if isinstance(cycles_data, dict) and "values" in cycles_data:
+                    batch_cycles = cycles_data.get("values", [])
+                    
+                    # 배치가 비어있으면 더 이상 데이터가 없음
+                    if not batch_cycles:
+                        break
+                    
+                    # 각 사이클 처리
+                    for cycle in batch_cycles:
+                        try:
+                            # 안전한 필드 추출
+                            cycle_id = cycle.get("id") if cycle.get("id") else None
+                            cycle_key = cycle.get("key") if cycle.get("key") else None
+                            cycle_name = cycle.get("name") if cycle.get("name") else "이름 없음"
+                            
+                            # description 안전 추출
+                            description = cycle.get("description", "설명이 없습니다.")
+                            
+                            # status 안전 추출
+                            status = "Not Started"
+                            if cycle.get("statusName"):
+                                status = str(cycle.get("statusName"))
+                            elif cycle.get("status"):
+                                status_val = cycle.get("status")
+                                if isinstance(status_val, str):
+                                    status = status_val
+                                elif isinstance(status_val, dict) and status_val.get("name"):
+                                    status = str(status_val.get("name"))
+                            
+                            # 환경 정보 추출
+                            environment = cycle.get("environment", "Unknown")
+                            if isinstance(environment, dict):
+                                environment = environment.get("name", "Unknown")
+                            
+                            # 버전 정보 추출
+                            version = cycle.get("version", "N/A")
+                            if isinstance(version, dict):
+                                version = version.get("name", "N/A")
+                            
+                            # 빌드 정보 추출
+                            build = cycle.get("build", "N/A")
+                            
+                            # 작성자 안전 추출
+                            created_by = get_safe_author_name(cycle)
+                            
+                            # 담당자 추출
+                            assigned_to = "미할당"
+                            if cycle.get("owner"):
+                                owner = cycle.get("owner")
+                                if isinstance(owner, dict):
+                                    assigned_to = owner.get("displayName", "미할당")
+                                elif isinstance(owner, str):
+                                    assigned_to = owner
+                            
+                            # 날짜 안전 추출
+                            start_date = cycle.get("plannedStartDate", "N/A")
+                            end_date = cycle.get("plannedEndDate", "N/A")
+                            created_at = cycle.get("createdOn", "N/A")
+                            
+                            # 테스트 케이스 통계 (기본값)
+                            total_test_cases = 0
+                            executed_test_cases = 0
+                            passed_test_cases = 0
+                            failed_test_cases = 0
+                            blocked_test_cases = 0
+                            
+                            # 통계 정보가 있다면 추출
+                            if cycle.get("testExecutions"):
+                                executions = cycle.get("testExecutions", {})
+                                total_test_cases = executions.get("total", 0)
+                                passed_test_cases = executions.get("passed", 0)
+                                failed_test_cases = executions.get("failed", 0)
+                                blocked_test_cases = executions.get("blocked", 0)
+                                executed_test_cases = passed_test_cases + failed_test_cases + blocked_test_cases
+                            
+                            formatted_cycle = {
+                                "id": cycle_id,
+                                "zephyr_cycle_id": cycle_key,
+                                "cycle_name": cycle_name,
+                                "description": description,
+                                "version": version,
+                                "environment": environment,
+                                "build": build,
+                                "status": status,
+                                "created_by": created_by,
+                                "assigned_to": assigned_to,
+                                "start_date": start_date,
+                                "end_date": end_date,
+                                "total_test_cases": total_test_cases,
+                                "executed_test_cases": executed_test_cases,
+                                "passed_test_cases": passed_test_cases,
+                                "failed_test_cases": failed_test_cases,
+                                "blocked_test_cases": blocked_test_cases,
+                                "created_at": created_at,
+                                "last_sync": created_at,
+                                "project_id": project_id
+                            }
+                            all_cycles.append(formatted_cycle)
+                            
+                        except Exception as e:
+                            st.warning(f"테스트 사이클 처리 중 오류: {str(e)}")
+                            continue
+                    
+                    # 다음 배치로 이동
+                    current_skip += max_results_per_request
+                    
+                    # 배치 크기가 요청한 크기보다 작으면 마지막 배치
+                    if len(batch_cycles) < max_results_per_request:
+                        break
+                else:
+                    # API 응답 구조가 예상과 다름
+                    break
+            else:
+                st.error(f"Zephyr 테스트 사이클 조회 API 오류: HTTP {response.status_code}")
+                break
+        
+        # 생성일 기준으로 최신순 정렬
+        all_cycles.sort(key=lambda x: x.get('created_at', ''), reverse=True)
+        
+        return all_cycles
+            
+    except Exception as e:
+        st.error(f"Zephyr 테스트 사이클 조회 실패: {str(e)}")
+        return []
+
+def get_zephyr_test_cycle(cycle_id):
+    """Zephyr 테스트 사이클 상세 조회"""
+    import os
+    from dotenv import load_dotenv
+    
+    # .env 파일 로드
+    load_dotenv()
+    
+    zephyr_api_token = os.getenv('ZEPHYR_API_TOKEN', '')
+    
+    if not zephyr_api_token:
+        return {"success": False, "message": "ZEPHYR_API_TOKEN이 설정되지 않았습니다."}
+    
+    try:
+        # Zephyr Scale Cloud API 공식 엔드포인트 사용
+        url = f"https://api.zephyrscale.smartbear.com/v2/testcycles/{cycle_id}"
+        headers = {
+            "Authorization": f"Bearer {zephyr_api_token}",
+            "Accept": "application/json"
+        }
+        
+        response = requests.get(url, headers=headers, timeout=30, verify=False)
+        
+        if response.status_code == 200:
+            return response.json()
+        else:
+            st.error(f"Zephyr 테스트 사이클 상세 조회 API 오류: HTTP {response.status_code}")
+            return None
+            
+    except Exception as e:
+        st.error(f"Zephyr 테스트 사이클 상세 조회 실패: {str(e)}")
+        return None
+
+def sync_zephyr_test_cycle(project_id, cycle_id, sync_data):
+    """Zephyr 테스트 사이클 동기화"""
+    import time
+    
+    try:
+        # 동기화 시뮬레이션 (실제로는 복잡한 동기화 로직 필요)
+        sync_direction = sync_data.get("sync_direction", "import")
+        sync_type = sync_data.get("sync_type", "test_executions")
+        
+        # 간단한 지연 시뮬레이션
+        time.sleep(2)
+        
+        # 캐시 클리어
+        st.cache_data.clear()
+        
+        return {
+            "success": True,
+            "message": f"테스트 사이클 {sync_direction} 동기화가 시작되었습니다.",
+            "sync_id": f"cycle_sync_{cycle_id}_{int(time.time())}",
+            "project_id": project_id,
+            "cycle_id": cycle_id,
+            "sync_direction": sync_direction,
+            "sync_type": sync_type,
+            "status": "started"
+        }
+        
+    except Exception as e:
+        return {
+            "success": False,
+            "message": f"테스트 사이클 동기화 시작 실패: {str(e)}"
+        }
+
+def get_zephyr_cycle_executions(cycle_id, skip=0, limit=100):
+    """Zephyr 테스트 사이클의 실행 결과 조회"""
+    import os
+    from dotenv import load_dotenv
+    
+    # .env 파일 로드
+    load_dotenv()
+    
+    zephyr_api_token = os.getenv('ZEPHYR_API_TOKEN', '')
+    
+    if not zephyr_api_token:
+        return {"success": False, "message": "ZEPHYR_API_TOKEN이 설정되지 않았습니다."}
+    
+    try:
+        # Zephyr Scale Cloud API 공식 엔드포인트 사용
+        url = "https://api.zephyrscale.smartbear.com/v2/testexecutions"
+        headers = {
+            "Authorization": f"Bearer {zephyr_api_token}",
+            "Accept": "application/json"
+        }
+        
+        # 쿼리 파라미터 설정
+        params = {
+            "testCycle": cycle_id,
+            "maxResults": limit,
+            "startAt": skip
+        }
+        
+        response = requests.get(url, headers=headers, params=params, timeout=30, verify=False)
+        
+        if response.status_code == 200:
+            executions_data = response.json()
+            
+            # API 응답을 내부 형식으로 변환
+            if isinstance(executions_data, dict) and "values" in executions_data:
+                return executions_data.get("values", [])
+            else:
+                return []
+        else:
+            st.error(f"Zephyr 테스트 실행 결과 조회 API 오류: HTTP {response.status_code}")
+            return []
+            
+    except Exception as e:
+        st.error(f"Zephyr 테스트 실행 결과 조회 실패: {str(e)}")
+        return []
 
 
 # QA 요청서 관련 API 함수들

@@ -168,8 +168,8 @@ def show_task_management():
     if tasks:
         st.subheader(f"📊 작업 목록 ({len(tasks)}개)")
         
-        # 우선순위별 정렬 옵션
-        col1, col2 = st.columns(2)
+        # 정렬 및 페이지 설정 옵션
+        col1, col2, col3 = st.columns(3)
         with col1:
             sort_by = st.selectbox("정렬 기준", ["전체", "우선순위", "상태", "업데이트 시간"])
         with col2:
@@ -178,6 +178,14 @@ def show_task_management():
                 sort_order = st.selectbox("정렬 순서", ["높은 순", "낮은 순"])
             else:
                 sort_order = st.selectbox("정렬 순서", ["미지정"], disabled=True)
+        with col3:
+            # 페이지당 표시 개수 선택
+            items_per_page = st.selectbox(
+                "페이지당 표시", 
+                [10, 20, 50, 100, "전체"],
+                index=1,  # 기본값 20
+                help="한 페이지에 표시할 작업 개수를 선택하세요"
+            )
         
         # 우선순위 매핑
         priority_order = {"Highest": 5, "High": 4, "Medium": 3, "Low": 2, "Lowest": 1}
@@ -191,30 +199,52 @@ def show_task_management():
             tasks.sort(key=lambda x: priority_order.get(x.get('priority', 'Medium'), 3), 
                       reverse=(sort_order == "높은 순"))
         elif sort_by == "상태":
-            tasks.sort(key=lambda x: qa_status_order.get(x.get('status', '미시작'), 1), 
+            tasks.sort(key=lambda x: qa_status_order.get(x.get('qa_status', '미시작'), 1), 
                       reverse=(sort_order == "높은 순"))
         elif sort_by == "업데이트 시간":
-            tasks.sort(key=lambda x: x.get('updated_at', ''), 
-                      reverse=(sort_order == "높은 순"))
+            # None 값 처리를 위한 안전한 정렬
+            def safe_date_key(task):
+                updated_at = task.get('updated_at')
+                if updated_at is None or updated_at == '':
+                    return '1900-01-01'  # 가장 오래된 날짜로 설정
+                return str(updated_at)
+            
+            tasks.sort(key=safe_date_key, reverse=(sort_order == "높은 순"))
         
-        # 페이지네이션 설정
-        items_per_page = 20
-        total_pages = (len(tasks) + items_per_page - 1) // items_per_page
-        
-        # 페이지 선택
-        if total_pages > 1:
-            current_page = st.selectbox(
-                "페이지 선택",
-                range(1, total_pages + 1),
-                key="task_page_selector"
-            ) - 1
-        else:
+        # 페이지네이션 설정 - 사용자 선택에 따라 동적 처리
+        if items_per_page == "전체":
+            # 전체 표시 시 페이지네이션 없음
+            page_tasks = tasks
             current_page = 0
+            total_pages = 1
+        else:
+            # 선택된 개수에 따른 페이지네이션
+            items_per_page = int(items_per_page)
+            total_pages = (len(tasks) + items_per_page - 1) // items_per_page
+            
+            # 페이지 선택
+            if total_pages > 1:
+                current_page = st.selectbox(
+                    "페이지 선택",
+                    range(1, total_pages + 1),
+                    key="task_page_selector",
+                    help=f"총 {total_pages}페이지 중 선택"
+                ) - 1
+            else:
+                current_page = 0
+            
+            # 현재 페이지의 작업들만 표시
+            start_idx = current_page * items_per_page
+            end_idx = min(start_idx + items_per_page, len(tasks))
+            page_tasks = tasks[start_idx:end_idx]
         
-        # 현재 페이지의 작업들만 표시
-        start_idx = current_page * items_per_page
-        end_idx = min(start_idx + items_per_page, len(tasks))
-        page_tasks = tasks[start_idx:end_idx]
+        # 표시 정보
+        if items_per_page == "전체":
+            st.info(f"📊 전체 {len(tasks)}개 작업을 표시합니다.")
+        else:
+            start_num = current_page * items_per_page + 1
+            end_num = min((current_page + 1) * items_per_page, len(tasks))
+            st.info(f"📊 {start_num}-{end_num}번째 작업 (전체 {len(tasks)}개 중)")
         
         # 현재 페이지의 작업들 표시
         for i, task in enumerate(page_tasks):
@@ -310,19 +340,17 @@ def delete_task_modal(task_id, jira_key, title):
 
 
 def show_task_card(task, index, task_type):
-    """순수 Streamlit 컴포넌트로 구성된 안정적인 작업 카드"""
+    """실제 서비스 수준의 고급스럽고 간편한 작업 카드"""
     
     # 기본 정보 추출
     jira_key = task.get('jira_key', 'N/A')
     title = task.get('title', 'N/A')
     description = task.get('description', '설명이 없습니다.')
     priority = task.get('priority', 'Medium')
-    qa_status = task.get('qa_status', '미시작')  # qa_status 필드 사용
-    assignee = task.get('assignee', 'N/A')  # 실제 데이터베이스 필드 사용
-    updated_at = task.get('updated_at', 'N/A')[:10] if task.get('updated_at') else 'N/A'
+    qa_status = task.get('qa_status', '미시작')
+    assignee = task.get('assignee', 'N/A')
     created_at = task.get('created_at', 'N/A')[:10] if task.get('created_at') else 'N/A'
     task_id = task.get('id')
-    project_id = task.get('project_id', 'N/A')
     
     # 지라 URL
     jira_url = get_jira_issue_url(jira_key) if jira_key and jira_key != 'N/A' else None
@@ -333,229 +361,315 @@ def show_task_card(task, index, task_type):
     if memo_data and memo_data.get('memo'):
         current_memo = memo_data['memo']
     
-    # 우선순위별 이모지
-    priority_emojis = {
-        'Highest': '🔴',
-        'High': '🟠', 
-        'Medium': '🟡',
-        'Low': '🟢',
-        'Lowest': '🔵'
+    # 우선순위별 색상 (실제 서비스 스타일)
+    priority_colors = {
+        'Highest': '#dc2626',  # 빨강 (긴급)
+        'High': '#ea580c',     # 주황 (높음)
+        'Medium': '#ca8a04',   # 노랑 (보통)
+        'Low': '#16a34a',      # 초록 (낮음)
+        'Lowest': '#2563eb'    # 파랑 (최저)
     }
-    priority_emoji = priority_emojis.get(priority, '🟡')
+    priority_color = priority_colors.get(priority, '#ca8a04')
     
-    # QA 상태별 이모지
-    status_emojis = {
-        'QA 완료': '✅',
-        'QA 진행중': '🔄',
-        'QA 시작': '🚀',
-        '미시작': '⏸️'
+    # QA 상태별 색상 (실제 서비스 스타일)
+    status_colors = {
+        'QA 완료': '#059669',    # 초록
+        'QA 진행중': '#d97706',  # 주황
+        'QA 시작': '#2563eb',    # 파랑
+        '미시작': '#6b7280'      # 회색
     }
-    status_emoji = status_emojis.get(qa_status, '⏸️')
+    status_color = status_colors.get(qa_status, '#6b7280')
     
     # 삭제 모달 표시
     if st.session_state.get(f'show_delete_modal_{task_id}', False):
         delete_task_modal(task_id, jira_key, title)
     
-    # 카드 컨테이너 - 다크테마 디자인
+    # 다크모드 실제 서비스 스타일의 카드 컨테이너
     with st.container():
-        # 상태별 배경색 설정 (다크테마)
-        status_colors = {
-            'QA 완료': '#1e3a2e',  # 다크 초록
-            'QA 진행중': '#3d3a1e',  # 다크 노랑
-            'QA 시작': '#1e2a3d',   # 다크 파랑
-            '미시작': '#2d2d2d'     # 다크 회색
-        }
-        
-        card_color = status_colors.get(qa_status, '#2d2d2d')
-        
-        # 우선순위별 테두리 색상 (다크테마용)
-        priority_border_colors = {
-            'Highest': '#ff4757',  # 밝은 빨강
-            'High': '#ff7f50',     # 밝은 주황
-            'Medium': '#ffa502',   # 밝은 노랑
-            'Low': '#2ed573',      # 밝은 초록
-            'Lowest': '#3742fa'    # 밝은 파랑
-        }
-        
-        border_color = priority_border_colors.get(priority, '#ffa502')
-        
-        # 스크롤 위치 유지를 위한 앵커 추가
-        scroll_anchor = f"task_card_{task_id}"
-        
-        # 카드 스타일링 (다크테마 + 보더)
+        # 메인 카드 - 다크모드 고급 디자인
         st.markdown(f"""
-        <div id="{scroll_anchor}" style="
-            background-color: {card_color};
-            color: #ffffff;
-            padding: 20px;
-            border-radius: 10px;
-            border-left: 5px solid {border_color};
-            border: 2px solid #555555;
-            margin: 20px 0;
-            box-shadow: 0 6px 12px rgba(0,0,0,0.4);
+        <div style="
+            background: linear-gradient(145deg, #1f2937, #111827);
+            border: 1px solid #374151;
+            border-radius: 12px;
+            padding: 0;
+            margin: 16px 0;
+            box-shadow: 0 4px 6px rgba(0, 0, 0, 0.3), 0 1px 3px rgba(0, 0, 0, 0.2);
+            transition: all 0.3s ease;
+            position: relative;
+            overflow: hidden;
         ">
         """, unsafe_allow_html=True)
         
-        # 상태 변경 후 스크롤 위치 복원
-        if st.session_state.get(f'scroll_to_task_{task_id}', False):
-            st.markdown(f"""
-            <script>
-                setTimeout(function() {{
-                    document.getElementById('{scroll_anchor}').scrollIntoView({{
-                        behavior: 'smooth',
-                        block: 'center'
-                    }});
-                }}, 100);
-            </script>
-            """, unsafe_allow_html=True)
-            # 스크롤 완료 후 플래그 제거
-            del st.session_state[f'scroll_to_task_{task_id}']
+        # 우선순위별 좌측 액센트 바
+        st.markdown(f"""
+        <div style="
+            position: absolute;
+            left: 0;
+            top: 0;
+            bottom: 0;
+            width: 4px;
+            background: linear-gradient(180deg, {priority_color}, {priority_color}aa);
+        "></div>
+        """, unsafe_allow_html=True)
         
-        # 첫 번째 행: 기본 정보
-        col1, col2, col3 = st.columns([4, 1, 1])
-        
-        with col1:
-            # 제목과 지라 키 - 더 큰 폰트
-            if jira_url:
-                st.markdown(f"## 🎫 [{jira_key}]({jira_url}) {title}")
-            else:
-                st.markdown(f"## 🎫 {jira_key} {title}")
-        
-        with col2:
-            # 우선순위 - 배지 스타일 (다크테마)
-            st.markdown(f"""
-            <div style="text-align: center; padding: 8px; background-color: #404040; color: #ffffff; border-radius: 15px; margin: 5px; border: 1px solid {border_color};">
-                <strong>{priority_emoji} {priority}</strong>
+        # 헤더 영역 - 다크모드 스타일
+        st.markdown(f"""
+        <div style="
+            padding: 16px 20px;
+            border-bottom: 1px solid #374151;
+            background: linear-gradient(135deg, #1f2937, #374151);
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+        ">
+            <div style="display: flex; align-items: center; gap: 12px; flex: 1;">
+                <div style="
+                    background: linear-gradient(135deg, {priority_color}, {priority_color}dd);
+                    color: white;
+                    padding: 6px 12px;
+                    border-radius: 6px;
+                    font-size: 0.75rem;
+                    font-weight: 700;
+                    text-transform: uppercase;
+                    letter-spacing: 0.5px;
+                    box-shadow: 0 2px 4px rgba(0,0,0,0.3);
+                ">
+                    {priority}
+                </div>
+                <div style="
+                    background: linear-gradient(135deg, {status_color}, {status_color}dd);
+                    color: white;
+                    padding: 6px 16px;
+                    border-radius: 16px;
+                    font-size: 0.8rem;
+                    font-weight: 600;
+                    box-shadow: 0 2px 4px rgba(0,0,0,0.3);
+                ">
+                    {qa_status}
+                </div>
+                <div style="color: #9ca3af; font-size: 0.875rem; font-weight: 500;">
+                    👤 {assignee}
+                </div>
+                <div style="color: #9ca3af; font-size: 0.875rem; font-weight: 500;">
+                    📅 {created_at}
+                </div>
             </div>
-            """, unsafe_allow_html=True)
+        </div>
+        """, unsafe_allow_html=True)
         
-        with col3:
-            # QA 상태 - 배지 스타일 (다크테마)
-            status_badge_colors = {
-                'QA 완료': '#2ed573',
-                'QA 진행중': '#ffa502',
-                'QA 시작': '#3742fa',
-                '미시작': '#747d8c'
-            }
-            status_badge_color = status_badge_colors.get(qa_status, '#747d8c')
-            
-            st.markdown(f"""
-            <div style="text-align: center; padding: 8px; background-color: #404040; color: #ffffff; border-radius: 15px; margin: 5px; border: 1px solid {status_badge_color};">
-                <strong>{status_emoji} {qa_status}</strong>
+        # 제목 및 지라 키
+        st.markdown(f"""
+        <div style="padding: 20px 20px 16px 20px;">
+            <div style="display: flex; align-items: center; gap: 10px; margin-bottom: 12px;">
+                <span style="
+                    background: linear-gradient(135deg, #374151, #4b5563);
+                    color: #e5e7eb;
+                    padding: 4px 12px;
+                    border-radius: 6px;
+                    font-size: 0.8rem;
+                    font-weight: 600;
+                    font-family: 'SF Mono', 'Monaco', 'Inconsolata', 'Roboto Mono', monospace;
+                    border: 1px solid #4b5563;
+                ">
+                    {jira_key}
+                </span>
+                {f'<a href="{jira_url}" target="_blank" style="color: #60a5fa; text-decoration: none; font-size: 0.875rem; font-weight: 500; transition: color 0.2s;">🔗 Jira에서 보기</a>' if jira_url else ''}
             </div>
-            """, unsafe_allow_html=True)
-        
-        # 두 번째 행: 메타 정보
-        col1, col2, col3 = st.columns(3)
-        
-        with col1:
-            st.info(f"👤 **담당자:** {assignee}")
-        
-        with col2:
-            st.info(f"📅 **생성일:** {created_at}")
-        
-        with col3:
-            if jira_url:
-                st.link_button("🔗 지라에서 보기", jira_url)
-        
-        # 세 번째 행: 작업 설명
-        st.markdown("**📝 작업 설명**")
-        with st.container():
-            # 설명 텍스트 정리 - 앞뒤 공백 제거 및 연속된 줄바꿈 정리
-            if description and description.strip():
-                # 앞뒤 공백 제거
-                clean_description = description.strip()
-                # 연속된 줄바꿈을 하나로 정리
-                import re
-                clean_description = re.sub(r'\n\s*\n', '\n\n', clean_description)
-                # HTML 이스케이프 처리
-                clean_description = clean_description.replace('&', '&').replace('<', '<').replace('>', '>')
-                # 줄바꿈을 <br>로 변환
-                description_formatted = clean_description.replace('\n', '<br>')
-            else:
-                description_formatted = '설명이 없습니다.'
-            
-            st.markdown(f"""
-            <div style="
-                background-color: #404040;
-                color: #ffffff;
-                padding: 15px;
-                border-radius: 8px;
-                border-left: 3px solid {border_color};
-                margin: 10px 0;
-                word-wrap: break-word;
-                max-height: 200px;
-                overflow-y: auto;
-                line-height: 1.5;
+            <h3 style="
+                margin: 0;
+                color: #f9fafb;
+                font-size: 1.25rem;
+                font-weight: 700;
+                line-height: 1.4;
+                text-shadow: 0 1px 2px rgba(0,0,0,0.3);
             ">
-            {description_formatted}
+                {title}
+            </h3>
+        </div>
+        """, unsafe_allow_html=True)
+        
+        # 작업 설명 - 가독성 개선된 다크모드 스타일
+        clean_description = description.strip() if description and description.strip() else '설명이 없습니다.'
+        import re
+        clean_description = re.sub(r'\n\s*\n', '\n\n', clean_description)
+        
+        st.markdown(f"""
+        <div style="padding: 0 20px 20px 20px;">
+            <div style="margin-bottom: 10px; color: #f3f4f6; font-weight: 600; font-size: 0.9rem;">
+                📄 작업 설명
+            </div>
+            <div style="
+                background: linear-gradient(135deg, #1e293b, #334155);
+                border: 1px solid #475569;
+                border-radius: 10px;
+                padding: 20px;
+                color: #f1f5f9;
+                font-size: 1rem;
+                line-height: 1.7;
+                white-space: pre-wrap;
+                box-shadow: inset 0 1px 3px rgba(0,0,0,0.1);
+                font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', 'Roboto', sans-serif;
+                letter-spacing: 0.3px;
+            ">
+                {clean_description}
+            </div>
+        </div>
+        """, unsafe_allow_html=True)
+        
+        # 기존 메모 (있는 경우만) - 편집/삭제 가능한 다크모드 스타일
+        if current_memo:
+            st.markdown(f"""
+            <div style="padding: 0 20px 20px 20px;">
+                <div style="margin-bottom: 10px; color: #f3f4f6; font-weight: 600; font-size: 0.875rem;">
+                    📋 기존 메모
+                </div>
             </div>
             """, unsafe_allow_html=True)
+            
+            # 메모 편집 모드 체크
+            edit_memo_key = f"edit_memo_{task_type}_{task_id}_{index}"
+            is_editing = st.session_state.get(edit_memo_key, False)
+            
+            col1, col2, col3 = st.columns([6, 1, 1])
+            
+            # 편집 모드에서는 text_area를 별도 변수로 저장
+            edited_memo_value = None
+            
+            with col1:
+                if is_editing:
+                    # 편집 모드
+                    edited_memo_value = st.text_area(
+                        "메모 편집",
+                        value=current_memo,
+                        height=100,
+                        key=f"edited_memo_{task_type}_{task_id}_{index}",
+                        label_visibility="collapsed"
+                    )
+                else:
+                    # 읽기 모드
+                    st.markdown(f"""
+                    <div style="
+                        background: linear-gradient(135deg, #451a03, #78350f);
+                        border: 1px solid #92400e;
+                        border-radius: 8px;
+                        padding: 16px;
+                        color: #fbbf24;
+                        font-size: 0.875rem;
+                        line-height: 1.6;
+                        white-space: pre-wrap;
+                        box-shadow: inset 0 1px 3px rgba(0,0,0,0.3);
+                        margin: 0 20px 20px 20px;
+                    ">
+                        {current_memo}
+                    </div>
+                    """, unsafe_allow_html=True)
+            
+            with col2:
+                if is_editing:
+                    # 저장 버튼 (기존 메모 편집용)
+                    if st.button("💾", key=f"save_edit_memo_{task_type}_{task_id}_{index}", help="메모 저장"):
+                        # 편집된 메모 텍스트 사용 - 직접 변수 사용
+                        if edited_memo_value is not None and edited_memo_value.strip():
+                            memo_result = update_task_memo(task_id, edited_memo_value.strip())
+                            if memo_result and memo_result.get("success"):
+                                st.success("✅ 메모가 수정되었습니다.")
+                                # 편집 모드 종료
+                                st.session_state[edit_memo_key] = False
+                                # 편집된 메모 세션 상태 정리
+                                edited_memo_key = f"edited_memo_{task_type}_{task_id}_{index}"
+                                if edited_memo_key in st.session_state:
+                                    del st.session_state[edited_memo_key]
+                                st.cache_data.clear()
+                                st.rerun()
+                            else:
+                                st.error("❌ 메모 수정에 실패했습니다.")
+                        else:
+                            st.warning("메모 내용을 입력해주세요.")
+                else:
+                    # 편집 버튼
+                    if st.button("✏️", key=f"edit_memo_{task_type}_{task_id}_{index}", help="메모 편집"):
+                        st.session_state[edit_memo_key] = True
+                        st.rerun()
+            
+            with col3:
+                if is_editing:
+                    # 취소 버튼
+                    if st.button("❌", key=f"cancel_memo_{task_type}_{task_id}_{index}", help="편집 취소"):
+                        st.session_state[edit_memo_key] = False
+                        st.rerun()
+                else:
+                    # 삭제 버튼
+                    if st.button("🗑️", key=f"delete_memo_{task_type}_{task_id}_{index}", help="메모 삭제"):
+                        memo_result = update_task_memo(task_id, "")
+                        if memo_result and memo_result.get("success"):
+                            st.success("✅ 메모가 삭제되었습니다.")
+                            st.cache_data.clear()
+                            st.rerun()
+                        else:
+                            st.error("❌ 메모 삭제에 실패했습니다.")
         
-        # 네 번째 행: 기존 메모 (있는 경우)
-        if current_memo:
-            st.markdown("**📝 기존 메모**")
-            with st.container():
-                st.text_area(
-                    "기존 메모 내용",
-                    value=current_memo,
-                    height=60,
-                    disabled=True,
-                    key=f"existing_memo_{task_type}_{task_id}_{index}"
-                )
+        st.markdown("""
+        <div style="
+            padding: 20px;
+            background: linear-gradient(135deg, #0f172a, #1e293b);
+            border-top: 1px solid #334155;
+            border-radius: 0 0 12px 12px;
+        ">
+        """, unsafe_allow_html=True)
         
-        # 다섯 번째 행: 컨트롤 영역 (3컬럼으로 변경)
-        col1, col2, col3 = st.columns([4, 2, 1])
+        col1, col2, col3, col4, col5 = st.columns([2.5, 0.5, 2, 1, 1])
         
         with col1:
             # 새 메모 입력
-            memo_text = st.text_area(
-                "새 메모 작성",
+            memo_text = st.text_input(
+                "💬 새 메모",
                 value="",
-                height=80,
                 key=f"new_memo_{task_type}_{task_id}_{index}",
-                placeholder="QA 진행 상황, 발견된 이슈, 특이사항 등을 기록하세요..."
+                placeholder="QA 진행 상황을 간단히 기록하세요...",
+                label_visibility="collapsed"
             )
-            
-            if st.button("💾 메모 저장", key=f"save_memo_{task_type}_{task_id}_{index}"):
+        
+        with col2:
+            # 메모 저장 버튼 (입력 폼 바로 옆)
+            if st.button("📝", key=f"save_memo_{task_type}_{task_id}_{index}", help="메모 저장", use_container_width=True):
                 if memo_text.strip():
-                    # 기존 메모와 새 메모를 합치기
                     combined_memo = current_memo
                     if combined_memo:
-                        combined_memo += f"\n\n--- {updated_at} 추가 ---\n{memo_text}"
+                        combined_memo += f"\n\n--- {created_at} 추가 ---\n{memo_text}"
                     else:
                         combined_memo = memo_text
                     
-                    result = update_task_memo(task_id, combined_memo)
-                    if result and result.get("success"):
+                    memo_result = update_task_memo(task_id, combined_memo)
+                    if memo_result and memo_result.get("success"):
                         st.success("✅ 메모가 저장되었습니다.")
+                        st.cache_data.clear()
                         st.rerun()
                     else:
                         st.error("❌ 메모 저장에 실패했습니다.")
                 else:
                     st.warning("메모 내용을 입력해주세요.")
         
-        with col2:
+        with col3:
             # QA 상태 변경
-            st.markdown("**검수 상태 변경**")
-            current_status = task.get('qa_status', '미시작')  # qa_status 필드 사용
+            current_status = task.get('qa_status', '미시작')
             qa_statuses = ["미시작", "QA 시작", "QA 진행중", "QA 완료"]
             
             new_status = st.selectbox(
-                "검수 상태",
+                "상태",
                 qa_statuses,
                 index=qa_statuses.index(current_status) if current_status in qa_statuses else 0,
                 key=f"qa_status_{task_type}_{task_id}_{index}",
                 label_visibility="collapsed"
             )
-            
-            if st.button("🔄 상태 변경", key=f"update_status_{task_type}_{task_id}_{index}"):
+        
+        with col4:
+            # QA 상태 저장 버튼
+            if st.button("🔄", key=f"save_status_{task_type}_{task_id}_{index}", help="QA 상태 저장", type="primary", use_container_width=True):
                 if new_status != current_status:
-                    result = update_qa_status(task_id, new_status)
-                    if result and result.get("success"):
+                    status_result = update_qa_status(task_id, new_status)
+                    if status_result and status_result.get("success"):
                         st.success(f"✅ 상태가 '{new_status}'로 변경되었습니다.")
-                        # 현재 위치 저장 (스크롤 위치 유지를 위해)
-                        st.session_state[f'scroll_to_task_{task_id}'] = True
                         st.cache_data.clear()
                         st.rerun()
                     else:
@@ -563,12 +677,11 @@ def show_task_card(task, index, task_type):
                 else:
                     st.info("현재 상태와 동일합니다.")
         
-        with col3:
-            # 삭제 버튼 - 모달 트리거
-            st.markdown("**작업 삭제**")
-            if st.button("🗑️ 삭제", key=f"delete_{task_type}_{task_id}_{index}", type="secondary"):
+        with col5:
+            # 작업 삭제 버튼
+            if st.button("🗑️", key=f"delete_{task_type}_{task_id}_{index}", help="작업 삭제", use_container_width=True):
                 st.session_state[f'show_delete_modal_{task_id}'] = True
                 st.rerun()
         
-        # 카드 스타일링 종료
-        st.markdown("</div>", unsafe_allow_html=True)
+        # 컨테이너 종료
+        st.markdown("</div></div>", unsafe_allow_html=True)

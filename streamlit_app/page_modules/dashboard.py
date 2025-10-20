@@ -6,6 +6,8 @@ import streamlit as st
 import pandas as pd
 import sys
 import os
+import plotly.express as px
+import plotly.graph_objects as go
 
 # 프로젝트 루트 디렉토리를 Python 경로에 추가
 current_dir = os.path.dirname(os.path.abspath(__file__))
@@ -18,7 +20,7 @@ from streamlit_app.utils.helpers import create_jira_link
 from streamlit_app.utils.deployment_notice import get_active_deployment_notice
 
 def show_dashboard_home():
-    """대시보드 홈 화면"""
+    """대시보드 홈 화면 - 고급 통계 포함"""
     # 제목 - 대시보드 홈에서만 표시
     st.markdown("""
     <div style="text-align: center; padding: 1rem 0; margin-bottom: 2rem;">
@@ -32,7 +34,7 @@ def show_dashboard_home():
     </div>
     """, unsafe_allow_html=True)
     
-    # 배포날짜 공지 영
+    # 배포날짜 공지 영역
     deployment_notice = get_active_deployment_notice()
     if deployment_notice:
         # 날짜 파싱 (예: "2025년 01월 15일 14:30" 형식)
@@ -134,7 +136,21 @@ def show_dashboard_home():
             "completed_tasks": 0,
             "in_progress_tasks": 0,
             "qa_ready_tasks": 0,
-            "completion_rate": 0
+            "completion_rate": 0,
+            "qa_completed": 0,
+            "qa_in_progress": 0,
+            "qa_started": 0,
+            "qa_not_started": 0,
+            "qa_completion_rate": 0,
+            "priority_highest": 0,
+            "priority_high": 0,
+            "priority_medium": 0,
+            "priority_low": 0,
+            "priority_lowest": 0,
+            "top_assignees": [],
+            "project_stats": [],
+            "weekly_new_tasks": 0,
+            "active_projects": 0
         }
         jira_projects_data = None
     
@@ -144,17 +160,31 @@ def show_dashboard_home():
             "completed_tasks": 0,
             "in_progress_tasks": 0,
             "qa_ready_tasks": 0,
-            "completion_rate": 0
+            "completion_rate": 0,
+            "qa_completed": 0,
+            "qa_in_progress": 0,
+            "qa_started": 0,
+            "qa_not_started": 0,
+            "qa_completion_rate": 0,
+            "priority_highest": 0,
+            "priority_high": 0,
+            "priority_medium": 0,
+            "priority_low": 0,
+            "priority_lowest": 0,
+            "top_assignees": [],
+            "project_stats": [],
+            "weekly_new_tasks": 0,
+            "active_projects": 0
         }
     
-    # 상단 메트릭 카드
-    col1, col2, col3, col4, col5 = st.columns(5)
+    # 상단 메트릭 카드 - 확장된 통계
+    col1, col2, col3, col4, col5, col6 = st.columns(6)
     
     with col1:
         st.metric(
             label="📋 전체 작업", 
             value=stats.get("total_tasks", 0),
-            delta=f"+{stats.get('qa_ready_tasks', 0)} QA 대기"
+            delta=f"+{stats.get('weekly_new_tasks', 0)} 이번 주"
         )
     
     with col2:
@@ -179,16 +209,122 @@ def show_dashboard_home():
         )
     
     with col5:
-        # 지라 프로젝트 수 표시
-        project_count = 0
-        if jira_projects_data and jira_projects_data.get("projects"):
-            project_count = len(jira_projects_data["projects"])
+        st.metric(
+            label="🧪 QA 완료", 
+            value=stats.get("qa_completed", 0),
+            delta=f"{stats.get('qa_completion_rate', 0)}% QA율"
+        )
+    
+    with col6:
+        # 활성 프로젝트 수 표시
+        project_count = stats.get("active_projects", 0)
         
         st.metric(
-            label="🔗 지라 프로젝트", 
+            label="🔗 활성 프로젝트", 
             value=project_count,
             delta="연동됨" if project_count > 0 else "미연동"
         )
+    
+    st.markdown("---")
+    
+    # 차트 섹션
+    col1, col2 = st.columns(2)
+    
+    with col1:
+        # QA 상태별 파이 차트
+        st.subheader("🧪 QA 상태 분포")
+        qa_data = {
+            'QA 완료': stats.get("qa_completed", 0),
+            'QA 진행중': stats.get("qa_in_progress", 0),
+            'QA 시작': stats.get("qa_started", 0),
+            '미시작': stats.get("qa_not_started", 0)
+        }
+        
+        if sum(qa_data.values()) > 0:
+            fig_qa = px.pie(
+                values=list(qa_data.values()),
+                names=list(qa_data.keys()),
+                color_discrete_sequence=['#28a745', '#ffc107', '#17a2b8', '#6c757d']
+            )
+            fig_qa.update_traces(textposition='inside', textinfo='percent+label')
+            fig_qa.update_layout(height=300, showlegend=True)
+            st.plotly_chart(fig_qa, use_container_width=True)
+        else:
+            st.info("QA 데이터가 없습니다.")
+    
+    with col2:
+        # 우선순위별 바 차트
+        st.subheader("⚡ 우선순위별 작업")
+        priority_data = {
+            'Highest': stats.get("priority_highest", 0),
+            'High': stats.get("priority_high", 0),
+            'Medium': stats.get("priority_medium", 0),
+            'Low': stats.get("priority_low", 0),
+            'Lowest': stats.get("priority_lowest", 0)
+        }
+        
+        if sum(priority_data.values()) > 0:
+            fig_priority = px.bar(
+                x=list(priority_data.keys()),
+                y=list(priority_data.values()),
+                color=list(priority_data.values()),
+                color_continuous_scale='Reds'
+            )
+            fig_priority.update_layout(height=300, showlegend=False)
+            fig_priority.update_xaxes(title="우선순위")
+            fig_priority.update_yaxes(title="작업 수")
+            st.plotly_chart(fig_priority, use_container_width=True)
+        else:
+            st.info("우선순위 데이터가 없습니다.")
+    
+    # 담당자별 통계
+    if stats.get("top_assignees"):
+        st.subheader("👥 담당자별 작업 현황 (상위 5명)")
+        assignee_df = pd.DataFrame(stats["top_assignees"])
+        
+        fig_assignee = px.bar(
+            assignee_df,
+            x='name',
+            y='count',
+            color='count',
+            color_continuous_scale='Blues'
+        )
+        fig_assignee.update_layout(height=300, showlegend=False)
+        fig_assignee.update_xaxes(title="담당자")
+        fig_assignee.update_yaxes(title="작업 수")
+        st.plotly_chart(fig_assignee, use_container_width=True)
+    
+    # 프로젝트별 통계
+    if stats.get("project_stats"):
+        st.subheader("📁 프로젝트별 작업 현황")
+        project_df = pd.DataFrame(stats["project_stats"])
+        
+        fig_project = px.bar(
+            project_df,
+            x='project',
+            y='count',
+            color='count',
+            color_continuous_scale='Greens'
+        )
+        fig_project.update_layout(height=300, showlegend=False)
+        fig_project.update_xaxes(title="프로젝트")
+        fig_project.update_yaxes(title="작업 수")
+        st.plotly_chart(fig_project, use_container_width=True)
+    
+    # 동기화 정보
+    if stats.get("last_sync_time"):
+        st.subheader("🔄 최근 동기화 정보")
+        col1, col2, col3 = st.columns(3)
+        
+        with col1:
+            st.info(f"🕐 마지막 동기화: {stats.get('last_sync_time')}")
+        
+        with col2:
+            st.info(f"📁 프로젝트: {stats.get('last_sync_project', 'N/A')}")
+        
+        with col3:
+            status_emoji = "✅" if stats.get('last_sync_status') == 'completed' else "❌"
+            st.info(f"{status_emoji} 상태: {stats.get('last_sync_status', 'N/A')}")
     
     st.markdown("---")
     

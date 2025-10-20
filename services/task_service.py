@@ -118,7 +118,8 @@ class TaskService:
     
     @staticmethod
     def get_dashboard_stats(db: Session) -> Dict[str, Any]:
-        """대시보드 통계 조회"""
+        """대시보드 통계 조회 - 고급 통계 포함"""
+        # 기본 통계
         total_tasks = db.query(Task).count()
         completed_tasks = db.query(Task).filter(Task.status == "Done").count()
         qa_ready_tasks = db.query(Task).filter(Task.status == "QA Ready").count()
@@ -128,12 +129,74 @@ class TaskService:
         if total_tasks > 0:
             completion_rate = round((completed_tasks / total_tasks) * 100, 1)
         
+        # QA 상태별 통계
+        qa_completed = db.query(Task).filter(Task.qa_status == "QA 완료").count()
+        qa_in_progress = db.query(Task).filter(Task.qa_status == "QA 진행중").count()
+        qa_started = db.query(Task).filter(Task.qa_status == "QA 시작").count()
+        qa_not_started = db.query(Task).filter(
+            (Task.qa_status == "미시작") | (Task.qa_status.is_(None))
+        ).count()
+        
+        # 우선순위별 통계
+        priority_stats = db.query(Task.priority, func.count(Task.id)).group_by(Task.priority).all()
+        priority_dict = {priority: count for priority, count in priority_stats}
+        
+        # 담당자별 통계 (상위 5명)
+        assignee_stats = db.query(Task.assignee, func.count(Task.id)).filter(
+            Task.assignee.isnot(None), Task.assignee != "", Task.assignee != "Unassigned"
+        ).group_by(Task.assignee).order_by(func.count(Task.id).desc()).limit(5).all()
+        
+        # 프로젝트별 통계
+        project_stats = db.query(Project.jira_project_key, func.count(Task.id)).join(
+            Task, Project.id == Task.project_id
+        ).group_by(Project.jira_project_key).order_by(func.count(Task.id).desc()).all()
+        
+        # 최근 동기화 정보
+        recent_sync = db.query(SyncHistory).order_by(desc(SyncHistory.started_at)).first()
+        
+        # 일주일간 생성된 작업 수
+        from datetime import datetime, timedelta
+        week_ago = datetime.now() - timedelta(days=7)
+        weekly_new_tasks = db.query(Task).filter(Task.created_at >= week_ago).count()
+        
         return {
+            # 기본 통계
             "total_tasks": total_tasks,
             "completed_tasks": completed_tasks,
             "qa_ready_tasks": qa_ready_tasks,
             "in_progress_tasks": in_progress_tasks,
-            "completion_rate": completion_rate
+            "completion_rate": completion_rate,
+            
+            # QA 상태별 통계
+            "qa_completed": qa_completed,
+            "qa_in_progress": qa_in_progress,
+            "qa_started": qa_started,
+            "qa_not_started": qa_not_started,
+            "qa_completion_rate": round((qa_completed / total_tasks) * 100, 1) if total_tasks > 0 else 0.0,
+            
+            # 우선순위별 통계
+            "priority_highest": priority_dict.get("Highest", 0),
+            "priority_high": priority_dict.get("High", 0),
+            "priority_medium": priority_dict.get("Medium", 0),
+            "priority_low": priority_dict.get("Low", 0),
+            "priority_lowest": priority_dict.get("Lowest", 0),
+            
+            # 담당자별 통계 (상위 5명)
+            "top_assignees": [{"name": assignee, "count": count} for assignee, count in assignee_stats],
+            
+            # 프로젝트별 통계
+            "project_stats": [{"project": project, "count": count} for project, count in project_stats],
+            
+            # 최근 동기화 정보
+            "last_sync_time": recent_sync.started_at.strftime("%Y-%m-%d %H:%M") if recent_sync else None,
+            "last_sync_project": recent_sync.project_key if recent_sync else None,
+            "last_sync_status": recent_sync.status if recent_sync else None,
+            
+            # 주간 통계
+            "weekly_new_tasks": weekly_new_tasks,
+            
+            # 활성 프로젝트 수
+            "active_projects": db.query(Project).filter(Project.is_active == True).count()
         }
     
     @staticmethod
@@ -191,7 +254,7 @@ class TaskService:
         selected_issues: Optional[List[str]] = None,
         progress_callback: Optional[callable] = None
     ) -> Dict[str, Any]:
-        """Jira 이슈 동기화 (진행률 콜백 지원)"""
+        """Jira 이슈 동기화 (진행률 콜백 지원) - 고성능 배치 처리"""
         try:
             # 동기화 이력 생성
             sync_history = SyncHistory(
@@ -205,27 +268,53 @@ class TaskService:
             # 프로젝트 확인 및 생성
             project = TaskService._ensure_project_exists(db, project_key)
             
-            # Jira 이슈 가져오기
-            issues = jira_service.get_issues(project_key)
-            total_issues = len(issues)
-            
-            # 선택된 이슈만 필터링
+            # Jira 이슈 가져오기 - 선택된 이슈만 개별 조회
             if selected_issues:
-                issues = [issue for issue in issues if issue["key"] in selected_issues]
-                logger.info(f"선택된 이슈 {len(issues)}개 처리 시작 (전체 {total_issues}개 중)")
+                # 선택된 이슈만 개별 조회 (성능 최적화)
+                issues = []
+                logger.info(f"선택된 이슈 {len(selected_issues)}개 개별 조회 시작")
+                
+                for issue_key in selected_issues:
+                    try:
+                        issue = jira_service.get_issue(issue_key)
+                        if issue:
+                            issues.append(issue)
+                            logger.debug(f"선택된 이슈 조회 성공: {issue_key}")
+                        else:
+                            logger.warning(f"이슈 {issue_key} 조회 실패: 이슈를 찾을 수 없음")
+                    except Exception as e:
+                        logger.warning(f"이슈 {issue_key} 조회 실패: {str(e)}")
+                
+                logger.info(f"선택된 이슈 {len(selected_issues)}개 중 {len(issues)}개 조회 성공")
+            else:
+                # 전체 이슈 조회
+                logger.info(f"프로젝트 {project_key} 전체 이슈 조회 시작")
+                issues = jira_service.get_issues(project_key)
+                logger.info(f"프로젝트 {project_key} 전체 이슈 {len(issues)}개 조회 완료")
+            
+            # 기존 작업들을 한 번에 조회 (성능 최적화)
+            existing_tasks = {}
+            if issues:
+                jira_keys = [issue.get("key", "") for issue in issues if issue.get("key")]
+                existing_task_list = db.query(Task).filter(Task.jira_key.in_(jira_keys)).all()
+                existing_tasks = {task.jira_key: task for task in existing_task_list}
+                logger.info(f"기존 작업 {len(existing_tasks)}개 조회 완료")
             
             synced_count = 0
+            batch_size = 200  # 배치 크기를 200으로 증가
+            new_tasks = []
+            updated_tasks = []
             
+            # 배치 처리로 성능 대폭 향상
             for i, issue in enumerate(issues):
                 try:
                     jira_key = issue.get("key", "")
+                    if not jira_key:
+                        continue
                     
-                    # 진행률 콜백 호출
+                    # 진행률 콜백 호출 (매번 호출하되 성능 최적화)
                     if progress_callback:
-                        progress_callback(i, len(issues), jira_key)
-                    
-                    # 기존 작업 확인
-                    task = db.query(Task).filter(Task.jira_key == jira_key).first()
+                        progress_callback(i + 1, len(issues), jira_key)
                     
                     # Jira 서비스에서 이미 정규화된 데이터 사용
                     title = issue.get("summary", "")[:500]
@@ -235,9 +324,12 @@ class TaskService:
                     priority = issue.get("priority", "Medium")
                     jira_id = issue.get("id", "")
                     
+                    # 기존 작업 확인
+                    task = existing_tasks.get(jira_key)
+                    
                     if not task:
-                        # 새 작업 생성 (프로젝트 ID 포함)
-                        task = Task(
+                        # 새 작업 생성 (배치에 추가)
+                        new_task = Task(
                             jira_key=jira_key,
                             jira_id=jira_id,
                             title=title,
@@ -245,32 +337,42 @@ class TaskService:
                             status=status,
                             assignee=assignee,
                             priority=priority,
-                            project_id=project.id,  # 프로젝트 ID 설정
+                            project_id=project.id,
                             last_sync=datetime.now()
                         )
-                        db.add(task)
-                        logger.info(f"새 이슈 생성: {jira_key} - {title}")
+                        new_tasks.append(new_task)
                     else:
-                        # 기존 작업 업데이트
+                        # 기존 작업 업데이트 (배치에 추가)
                         task.title = title
                         task.description = description or task.description
                         task.status = status
                         task.assignee = assignee
                         task.priority = priority
-                        task.project_id = project.id  # 프로젝트 ID 업데이트
+                        task.project_id = project.id
                         task.last_sync = datetime.now()
-                        logger.info(f"이슈 업데이트: {jira_key} - {title}")
+                        updated_tasks.append(task)
                     
                     synced_count += 1
                     
-                    # 배치 처리를 위한 중간 커밋 (50개마다로 변경하여 성능 향상)
-                    if synced_count % 50 == 0:
+                    # 배치 처리 - 200개마다 한 번에 커밋
+                    if synced_count % batch_size == 0:
+                        # 새 작업들 한 번에 추가
+                        if new_tasks:
+                            db.add_all(new_tasks)
+                            new_tasks = []
+                        
+                        # 업데이트된 작업들은 이미 세션에 있으므로 별도 처리 불필요
                         db.commit()
-                        logger.info(f"중간 커밋: {synced_count}개 이슈 처리 완료")
+                        logger.info(f"배치 커밋: {synced_count}개 이슈 처리 완료 (배치 크기: {batch_size})")
                     
                 except Exception as e:
                     logger.error(f"이슈 {issue.get('key', 'Unknown')} 동기화 오류: {str(e)}")
                     continue
+            
+            # 남은 작업들 처리
+            if new_tasks:
+                db.add_all(new_tasks)
+                logger.info(f"마지막 배치: {len(new_tasks)}개 새 작업 추가")
             
             # 최종 진행률 콜백 호출
             if progress_callback:
@@ -282,16 +384,19 @@ class TaskService:
             sync_history.processed_issues = synced_count
             sync_history.completed_at = datetime.now()
             
+            # 최종 커밋
             db.commit()
             
-            logger.info(f"프로젝트 {project_key}: {synced_count}개 작업 동기화 완료")
+            logger.info(f"프로젝트 {project_key}: {synced_count}개 작업 동기화 완료 (새 작업: {len(new_tasks)}, 업데이트: {len(updated_tasks)})")
             
             return {
                 "success": True,
-                "message": f"동기화 완료! {synced_count}개 작업 처리됨",
+                "message": f"동기화 완료! {synced_count}개 작업 처리됨 (고성능 배치 처리)",
                 "project_key": project_key,
                 "synced_count": synced_count,
-                "total_issues": len(issues)
+                "total_issues": len(issues),
+                "new_tasks": len([t for t in new_tasks]) + len([t for t in existing_tasks.values() if t not in updated_tasks]),
+                "updated_tasks": len(updated_tasks)
             }
             
         except Exception as e:

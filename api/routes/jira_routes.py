@@ -104,10 +104,10 @@ async def get_jira_projects(include_issue_count: bool = False):
 
 
 @router.get("/projects/{project_key}/issues")
-async def get_jira_project_issues(project_key: str, limit: int = 300):
-    """Jira 프로젝트의 이슈 목록 가져오기 (최대 300개)"""
+async def get_jira_project_issues(project_key: str, limit: int = None, quick: bool = False):
+    """Jira 프로젝트의 이슈 목록 가져오기 (빠른 모드 지원)"""
     try:
-        issues = jira_service.get_issues(project_key, limit=limit)
+        issues = jira_service.get_issues(project_key, limit=limit, quick_mode=quick)
         
         if issues:
             logger.info(f"프로젝트 {project_key}: {len(issues)}개 이슈 조회 성공")
@@ -309,22 +309,31 @@ async def background_sync_project(
         
         # 이슈 목록 가져오기
         if selected_issues:
-            # 선택된 이슈만 처리
+            # 선택된 이슈만 처리 - 개별 이슈 조회로 최적화
             issues = []
-            for issue_key in selected_issues:
+            sync_status_store[project_key].total_issues = len(selected_issues)
+            
+            for i, issue_key in enumerate(selected_issues):
                 try:
+                    # 진행률 업데이트
+                    progress = 30 + int((i / len(selected_issues)) * 10)  # 30-40% 구간
+                    sync_status_store[project_key].progress = progress
+                    sync_status_store[project_key].message = f"선택된 이슈 조회 중: {issue_key} ({i+1}/{len(selected_issues)})"
+                    
                     issue = jira_service.get_issue(issue_key)
                     if issue:
                         issues.append(issue)
                         logger.info(f"선택된 이슈 조회 성공: {issue_key}")
+                    else:
+                        logger.warning(f"이슈 {issue_key} 조회 실패: 이슈를 찾을 수 없음")
                 except Exception as e:
                     logger.warning(f"이슈 {issue_key} 조회 실패: {str(e)}")
             
             logger.info(f"선택된 이슈 {len(selected_issues)}개 중 {len(issues)}개 조회 성공")
         else:
-            # 전체 이슈 조회
-            logger.info(f"프로젝트 {project_key} 전체 이슈 조회 시작")
-            issues = jira_service.get_issues(project_key, limit=300)
+            # 전체 이슈 조회 (무제한)
+            logger.info(f"프로젝트 {project_key} 전체 이슈 조회 시작 (무제한)")
+            issues = jira_service.get_issues(project_key)  # limit 제거
             logger.info(f"프로젝트 {project_key} 전체 이슈 {len(issues)}개 조회 완료")
         
         if not issues:
