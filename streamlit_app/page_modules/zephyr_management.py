@@ -979,11 +979,54 @@ def show_project_test_cycles(project):
 
 def load_test_cycles_for_project(project_id, project_name):
     """프로젝트의 테스트 사이클 로드 및 데이터베이스 저장"""
-    with st.spinner(f"'{project_name}' 테스트 사이클 조회 및 저장 중..."):
+    with st.spinner(f"'{project_name}' 테스트 사이클 조회 및 데이터베이스 저장 중..."):
         try:
-            from streamlit_app.api.client import get_zephyr_test_cycles, sync_zephyr_cycles_from_api
+            from streamlit_app.api.client import get_zephyr_test_cycles
+            import requests
             
-            # 실제 Zephyr API에서 테스트 사이클 조회
+            # 프로젝트 키 찾기 (먼저 수행)
+            project_key = None
+            zephyr_projects = st.session_state.get('zephyr_projects', [])
+            for proj in zephyr_projects:
+                if str(proj.get('id')) == str(project_id):
+                    project_key = proj.get('key') or proj.get('project_key')
+                    break
+            
+            # 프로젝트 키가 없으면 기본값 사용 또는 에러 처리
+            if not project_key:
+                # project_name에서 키 추출 시도 (예: "Project Name (KAN)" -> "KAN")
+                import re
+                match = re.search(r'\(([^)]+)\)$', project_name)
+                if match:
+                    project_key = match.group(1)
+                else:
+                    st.error(f"❌ 프로젝트 키를 찾을 수 없습니다. 프로젝트 ID: {project_id}")
+                    return
+            
+            # 백엔드 API를 통해 데이터베이스에 사이클 저장 (먼저 수행)
+            try:
+                sync_url = f"http://localhost:8002/api/v1/zephyr/sync-cycles/{project_key}"
+                response = requests.post(sync_url, timeout=30)
+                
+                if response.status_code == 200:
+                    result = response.json()
+                    if not result.get('success', False):
+                        st.warning(f"⚠️ 데이터베이스 저장 실패: {result.get('message', '알 수 없는 오류')}")
+                else:
+                    error_detail = f"HTTP {response.status_code}"
+                    try:
+                        error_response = response.json()
+                        error_detail = error_response.get('detail', error_detail)
+                    except:
+                        pass
+                    st.error(f"❌ 데이터베이스 저장 실패: {error_detail}")
+                    return
+            
+            except Exception as db_error:
+                st.error(f"❌ 데이터베이스 저장 중 오류: {str(db_error)}")
+                return
+            
+            # 이제 프론트엔드용 사이클 조회
             cycles = get_zephyr_test_cycles(project_id, limit=100)
             
             if cycles and isinstance(cycles, list):
@@ -997,25 +1040,7 @@ def load_test_cycles_for_project(project_id, project_name):
                 
                 # 세션 상태에 저장
                 st.session_state[f"test_cycles_{project_id}"] = cycles
-                
-                # 글로벌 사이클 저장소에도 저장 (작업 관리에서 사용할 수 있도록)
-                if 'global_zephyr_cycles' not in st.session_state:
-                    st.session_state.global_zephyr_cycles = {}
-                
-                # 프로젝트 키 찾기
-                project_key = None
-                zephyr_projects = st.session_state.get('zephyr_projects', [])
-                for proj in zephyr_projects:
-                    if proj.get('id') == project_id:
-                        project_key = proj.get('key')
-                        break
-                
-                if project_key:
-                    # 글로벌 저장소에 저장
-                    st.session_state.global_zephyr_cycles[project_key] = cycles
-                    st.success(f"✅ {len(cycles)}개 테스트 사이클 조회 완료! (작업 관리에서 사용 가능)")
-                else:
-                    st.success(f"✅ {len(cycles)}개 테스트 사이클 조회 완료!")
+                st.success(f"✅ {len(cycles)}개 테스트 사이클 조회 완료! (작업 관리에서 사용 가능)")
                 
                 if len(cycles) == 0:
                     st.info("ℹ️ 이 프로젝트에는 테스트 사이클이 없습니다.")

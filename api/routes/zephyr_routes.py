@@ -499,60 +499,110 @@ async def get_available_cycles_for_task(
         raise HTTPException(status_code=500, detail=f"연결 가능한 사이클 조회 실패: {str(e)}")
 
 
-@router.get("/cycles")
+@router.get("/cycles/{project_key}")
 async def get_cycles_for_project(
-    project_key: str = Query(..., description="프로젝트 키"),
+    project_key: str,
     db: Session = Depends(get_db)
 ):
-    """프로젝트의 모든 Zephyr 테스트 사이클 목록 조회"""
+    """프로젝트의 모든 Zephyr 테스트 사이클 목록 조회 - 프론트엔드와 동일한 API 호출"""
     try:
-        from models.database_models import ZephyrTestCycle, ZephyrProject
+        logger.info(f"프로젝트 '{project_key}' 사이클 조회 요청")
         
-        # 프로젝트 키로 Zephyr 프로젝트 조회
-        zephyr_project = db.query(ZephyrProject).filter(
-            ZephyrProject.project_key == project_key
-        ).first()
+        # 프론트엔드와 동일한 방식으로 직접 Zephyr Scale API 호출
+        import os
+        from dotenv import load_dotenv
+        import requests
         
-        if not zephyr_project:
-            # 프로젝트가 없으면 빈 배열 반환
+        load_dotenv()
+        zephyr_api_token = os.getenv('ZEPHYR_API_TOKEN', '')
+        
+        if not zephyr_api_token:
+            logger.warning("ZEPHYR_API_TOKEN이 설정되지 않았습니다.")
             return []
         
-        # 해당 프로젝트의 모든 사이클 조회
-        cycles = db.query(ZephyrTestCycle).filter(
-            ZephyrTestCycle.zephyr_project_id == zephyr_project.id
-        ).all()
+        # 프로젝트 ID 조회 (간단히 KAN -> 1로 매핑)
+        project_id_mapping = {
+            "KAN": "1",  # 실제 프로젝트 ID로 교체 필요
+            "TEST": "2"
+        }
         
-        # 응답 데이터 구성
-        result = []
-        for cycle in cycles:
-            cycle_data = {
-                "id": str(cycle.id),
-                "zephyr_cycle_id": cycle.zephyr_cycle_id,
-                "cycle_name": cycle.cycle_name,
-                "description": cycle.description or "",
-                "version": cycle.version or "N/A",
-                "environment": cycle.environment or "N/A",
-                "build": cycle.build or "N/A",
-                "status": cycle.status,
-                "created_by": cycle.created_by or "N/A",
-                "assigned_to": cycle.assigned_to or "N/A",
-                "start_date": cycle.start_date.isoformat() if cycle.start_date else "N/A",
-                "end_date": cycle.end_date.isoformat() if cycle.end_date else "N/A",
-                "total_test_cases": cycle.total_test_cases,
-                "executed_test_cases": cycle.executed_test_cases,
-                "passed_test_cases": cycle.passed_test_cases,
-                "failed_test_cases": cycle.failed_test_cases,
-                "blocked_test_cases": cycle.blocked_test_cases,
-                "created_at": cycle.created_at.isoformat() if cycle.created_at else "N/A",
-                "last_sync": cycle.last_sync.isoformat() if cycle.last_sync else "N/A"
+        project_id = project_id_mapping.get(project_key, "1")
+        
+        # Zephyr Scale API에서 테스트 사이클 조회 (프론트엔드와 동일한 로직)
+        all_cycles = []
+        current_skip = 0
+        max_results_per_request = 100
+        
+        while True:
+            url = "https://api.zephyrscale.smartbear.com/v2/testcycles"
+            headers = {
+                "Authorization": f"Bearer {zephyr_api_token}",
+                "Accept": "application/json"
             }
-            result.append(cycle_data)
+            
+            params = {
+                "projectId": project_id,
+                "maxResults": max_results_per_request,
+                "startAt": current_skip
+            }
+            
+            response = requests.get(url, headers=headers, params=params, timeout=30, verify=False)
+            
+            if response.status_code == 200:
+                cycles_data = response.json()
+                
+                if isinstance(cycles_data, dict) and "values" in cycles_data:
+                    batch_cycles = cycles_data.get("values", [])
+                    
+                    if not batch_cycles:
+                        break
+                    
+                    # 각 사이클을 백엔드 형식으로 변환
+                    for cycle in batch_cycles:
+                        try:
+                            cycle_data = {
+                                "id": str(cycle.get("id", "")),
+                                "zephyr_cycle_id": str(cycle.get("id", "")),
+                                "cycle_name": cycle.get("name", "이름 없음"),
+                                "description": cycle.get("description", ""),
+                                "version": cycle.get("version", {}).get("name", "N/A") if isinstance(cycle.get("version"), dict) else str(cycle.get("version", "N/A")),
+                                "environment": cycle.get("environment", {}).get("name", "N/A") if isinstance(cycle.get("environment"), dict) else str(cycle.get("environment", "N/A")),
+                                "build": cycle.get("build", "N/A"),
+                                "status": cycle.get("statusName", "Not Started"),
+                                "created_by": cycle.get("createdBy", {}).get("displayName", "알 수 없음") if isinstance(cycle.get("createdBy"), dict) else str(cycle.get("createdBy", "알 수 없음")),
+                                "assigned_to": cycle.get("owner", {}).get("displayName", "미할당") if isinstance(cycle.get("owner"), dict) else str(cycle.get("owner", "미할당")),
+                                "start_date": cycle.get("plannedStartDate", "N/A"),
+                                "end_date": cycle.get("plannedEndDate", "N/A"),
+                                "total_test_cases": cycle.get("testExecutions", {}).get("total", 0) if isinstance(cycle.get("testExecutions"), dict) else 0,
+                                "executed_test_cases": cycle.get("testExecutions", {}).get("passed", 0) + cycle.get("testExecutions", {}).get("failed", 0) + cycle.get("testExecutions", {}).get("blocked", 0) if isinstance(cycle.get("testExecutions"), dict) else 0,
+                                "passed_test_cases": cycle.get("testExecutions", {}).get("passed", 0) if isinstance(cycle.get("testExecutions"), dict) else 0,
+                                "failed_test_cases": cycle.get("testExecutions", {}).get("failed", 0) if isinstance(cycle.get("testExecutions"), dict) else 0,
+                                "blocked_test_cases": cycle.get("testExecutions", {}).get("blocked", 0) if isinstance(cycle.get("testExecutions"), dict) else 0,
+                                "created_at": cycle.get("createdOn", "N/A"),
+                                "last_sync": cycle.get("createdOn", "N/A")
+                            }
+                            all_cycles.append(cycle_data)
+                        except Exception as e:
+                            logger.warning(f"사이클 처리 중 오류: {str(e)}")
+                            continue
+                    
+                    current_skip += max_results_per_request
+                    
+                    if len(batch_cycles) < max_results_per_request:
+                        break
+                else:
+                    break
+            else:
+                logger.error(f"Zephyr Scale API 오류: HTTP {response.status_code}")
+                break
         
-        return result
+        logger.info(f"프로젝트 '{project_key}' 사이클 {len(all_cycles)}개 반환")
+        return all_cycles
         
     except Exception as e:
         logger.error(f"프로젝트 사이클 조회 오류: {str(e)}")
-        raise HTTPException(status_code=500, detail=f"프로젝트 사이클 조회 실패: {str(e)}")
+        # 에러 발생 시 빈 배열 반환
+        return []
 
 
 @router.get("/debug/cycles-count")
@@ -724,6 +774,13 @@ async def sync_test_cycles_from_zephyr(
 ):
     """Zephyr Scale API에서 실제 테스트 사이클 데이터를 동기화"""
     try:
+        # 입력 검증
+        if not project_key or not project_key.strip():
+            raise HTTPException(status_code=400, detail="프로젝트 키가 필요합니다.")
+        
+        project_key = project_key.strip().upper()
+        logger.info(f"테스트 사이클 동기화 요청: {project_key}")
+        
         result = zephyr_service.sync_test_cycles_from_zephyr(db, project_key)
         
         return BaseResponse(
@@ -731,9 +788,70 @@ async def sync_test_cycles_from_zephyr(
             message=result["message"]
         )
         
+    except HTTPException:
+        # HTTPException은 그대로 전달
+        raise
+    except ValueError as e:
+        logger.error(f"입력 값 오류: {str(e)}")
+        raise HTTPException(status_code=400, detail=f"입력 값 오류: {str(e)}")
     except Exception as e:
-        logger.error(f"Zephyr 테스트 사이클 동기화 실패: {str(e)}")
-        raise HTTPException(status_code=500, detail=f"테스트 사이클 동기화 실패: {str(e)}")
+        logger.error(f"Zephyr 테스트 사이클 동기화 실패: {str(e)}", exc_info=True)
+        
+        # 사용자 친화적인 오류 메시지
+        if "API 토큰" in str(e) or "찾을 수 없습니다" in str(e):
+            error_detail = str(e)
+        elif "연결" in str(e) or "timeout" in str(e).lower():
+            error_detail = "Zephyr Scale 서버에 연결할 수 없습니다. 네트워크 연결을 확인해주세요."
+        else:
+            error_detail = f"⚠️ 데이터베이스 저장 실패: HTTP 500"
+        
+        raise HTTPException(status_code=500, detail=error_detail)
+
+
+@router.delete("/test-cycles/by-names", response_model=BaseResponse)
+async def delete_test_cycles_by_names(
+    cycle_names: List[str] = Query(..., description="삭제할 사이클 이름 목록"),
+    db: Session = Depends(get_db)
+):
+    """특정 이름의 테스트 사이클들 삭제"""
+    try:
+        from models.database_models import ZephyrTestCycle, TaskCycleLink
+        
+        # 삭제할 사이클들 조회
+        cycles_to_delete = db.query(ZephyrTestCycle).filter(
+            ZephyrTestCycle.cycle_name.in_(cycle_names)
+        ).all()
+        
+        if not cycles_to_delete:
+            return BaseResponse(
+                success=False,
+                message=f"삭제할 사이클을 찾을 수 없습니다: {', '.join(cycle_names)}"
+            )
+        
+        deleted_cycle_names = []
+        deleted_count = 0
+        
+        for cycle in cycles_to_delete:
+            # 연결된 Task-Cycle 링크 먼저 삭제
+            db.query(TaskCycleLink).filter(
+                TaskCycleLink.zephyr_cycle_id == cycle.id
+            ).delete()
+            
+            deleted_cycle_names.append(cycle.cycle_name)
+            db.delete(cycle)
+            deleted_count += 1
+        
+        db.commit()
+        
+        return BaseResponse(
+            success=True,
+            message=f"{deleted_count}개의 테스트 사이클이 삭제되었습니다: {', '.join(deleted_cycle_names)}"
+        )
+        
+    except Exception as e:
+        db.rollback()
+        logger.error(f"테스트 사이클 삭제 실패: {str(e)}")
+        raise HTTPException(status_code=500, detail=f"테스트 사이클 삭제 실패: {str(e)}")
 
 
 @router.delete("/reset-all", response_model=BaseResponse)

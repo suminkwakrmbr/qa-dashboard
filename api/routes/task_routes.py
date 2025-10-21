@@ -461,66 +461,90 @@ async def unlink_task_from_cycle(
 
 @router.get("/{task_id}/available-cycles")
 async def get_available_cycles_for_task(task_id: int, db: Session = Depends(get_db)):
-    """Task에 연결 가능한 Zephyr 테스트 사이클 목록 조회 (아직 연결되지 않은 사이클들)"""
+    """Task에 연결 가능한 Zephyr 테스트 사이클 목록 조회 (데이터베이스에 동기화된 사이클에서 조회)"""
     try:
-        from models.database_models import TaskCycleLink, ZephyrTestCycle, ZephyrProject, Task
-        from sqlalchemy import and_, not_, exists
+        from models.database_models import TaskCycleLink, ZephyrTestCycle
+        from sqlalchemy import and_, not_
         
         # Task 존재 확인
         task = task_service.get_task_by_id(db, task_id)
         if not task:
             raise HTTPException(status_code=404, detail="작업을 찾을 수 없습니다.")
         
-        # Task의 프로젝트 정보 조회
-        # Task 모델에서 project_id를 통해 프로젝트 정보를 가져와야 함
-        # 현재는 모든 사이클을 반환하되, 이미 연결된 사이클은 제외
+        # 이미 연결된 사이클 ID 목록 조회 (외부 ID와 내부 ID 모두 고려)
+        linked_external_cycle_ids = set()
+        linked_internal_cycle_ids = set()
         
-        # 이미 연결된 사이클 ID 목록 조회
-        linked_cycle_ids = db.query(TaskCycleLink.zephyr_cycle_id).filter(
+        active_links = db.query(TaskCycleLink).filter(
             and_(
                 TaskCycleLink.task_id == task_id,
                 TaskCycleLink.is_active == True
             )
-        ).subquery()
-        
-        # 연결되지 않은 모든 사이클 조회
-        available_cycles = db.query(ZephyrTestCycle).filter(
-            not_(ZephyrTestCycle.id.in_(linked_cycle_ids))
         ).all()
+        
+        for link in active_links:
+            if link.zephyr_cycle_external_id:
+                linked_external_cycle_ids.add(str(link.zephyr_cycle_external_id))
+            if link.zephyr_cycle_id:
+                linked_internal_cycle_ids.add(link.zephyr_cycle_id)
+        
+        # 데이터베이스에 동기화된 모든 사이클 조회 (연결되지 않은 것만)
+        query = db.query(ZephyrTestCycle)
+        
+        # 내부 ID로 연결된 사이클 제외
+        if linked_internal_cycle_ids:
+            query = query.filter(not_(ZephyrTestCycle.id.in_(linked_internal_cycle_ids)))
+        
+        available_cycles = query.all()
         
         # 응답 데이터 구성
         result = []
         for cycle in available_cycles:
-            # ZephyrProject 정보 조회
-            project_key = "N/A"
-            if cycle.zephyr_project:
-                project_key = cycle.zephyr_project.project_key
-            
-            cycle_data = {
-                "id": str(cycle.id),
-                "zephyr_cycle_id": cycle.zephyr_cycle_id,
-                "cycle_name": cycle.cycle_name,
-                "description": cycle.description or "",
-                "version": cycle.version or "N/A",
-                "environment": cycle.environment or "N/A",
-                "build": cycle.build or "N/A",
-                "status": cycle.status,
-                "project_key": project_key,
-                "created_by": cycle.created_by or "N/A",
-                "assigned_to": cycle.assigned_to or "N/A",
-                "start_date": cycle.start_date.isoformat() if cycle.start_date else "N/A",
-                "end_date": cycle.end_date.isoformat() if cycle.end_date else "N/A",
-                "total_test_cases": cycle.total_test_cases,
-                "executed_test_cases": cycle.executed_test_cases,
-                "passed_test_cases": cycle.passed_test_cases,
-                "failed_test_cases": cycle.failed_test_cases,
-                "blocked_test_cases": cycle.blocked_test_cases,
-                "created_at": cycle.created_at.isoformat() if cycle.created_at else "N/A",
-                "last_sync": cycle.last_sync.isoformat() if cycle.last_sync else "N/A"
-            }
-            result.append(cycle_data)
+            try:
+                cycle_id = str(cycle.id)
+                
+                # 외부 ID로도 연결 확인 (Zephyr Scale의 실제 ID와 비교)
+                # cycle.zephyr_cycle_id는 Zephyr Scale의 실제 사이클 ID일 수 있음
+                if cycle.zephyr_cycle_id and str(cycle.zephyr_cycle_id) in linked_external_cycle_ids:
+                    continue
+                
+                # ZephyrProject 정보 조회
+                project_key = "N/A"
+                if cycle.zephyr_project:
+                    project_key = cycle.zephyr_project.project_key
+                
+                cycle_data = {
+                    "id": cycle_id,
+                    "zephyr_cycle_id": cycle.zephyr_cycle_id,
+                    "cycle_name": cycle.cycle_name,
+                    "description": cycle.description or "",
+                    "version": cycle.version or "N/A",
+                    "environment": cycle.environment or "N/A",
+                    "build": cycle.build or "N/A",
+                    "status": cycle.status,
+                    "project_key": project_key,
+                    "created_by": cycle.created_by or "N/A",
+                    "assigned_to": cycle.assigned_to or "N/A",
+                    "start_date": cycle.start_date.isoformat() if cycle.start_date else "N/A",
+                    "end_date": cycle.end_date.isoformat() if cycle.end_date else "N/A",
+                    "total_test_cases": cycle.total_test_cases,
+                    "executed_test_cases": cycle.executed_test_cases,
+                    "passed_test_cases": cycle.passed_test_cases,
+                    "failed_test_cases": cycle.failed_test_cases,
+                    "blocked_test_cases": cycle.blocked_test_cases,
+                    "created_at": cycle.created_at.isoformat() if cycle.created_at else "N/A",
+                    "last_sync": cycle.last_sync.isoformat() if cycle.last_sync else "N/A"
+                }
+                result.append(cycle_data)
+                
+            except Exception as e:
+                logger.warning(f"테스트 사이클 처리 중 오류: {str(e)}")
+                continue
         
-        logger.info(f"Task {task_id}에 연결 가능한 사이클 개수: {len(result)}")
+        # 생성일 기준으로 최신순 정렬
+        result.sort(key=lambda x: x.get('created_at', ''), reverse=True)
+        
+        logger.info(f"Task {task_id}에 연결 가능한 동기화된 사이클 개수: {len(result)}")
         return result
         
     except HTTPException:

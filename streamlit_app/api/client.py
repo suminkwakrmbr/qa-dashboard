@@ -1648,95 +1648,31 @@ def unlink_task_from_cycle(task_id, cycle_id):
         return {"success": False, "message": str(e)}
 
 def get_available_cycles_for_task(task_id, project_key=None):
-    """Task에 연결 가능한 사이클 목록 조회 (이미 연결된 사이클 제외) - Zephyr 관리와 동일한 로직 사용"""
+    """Task에 연결 가능한 사이클 목록 조회 (데이터베이스에 저장된 사이클 중 연결되지 않은 것들)"""
     try:
-        # 프로젝트 키가 없으면 빈 배열 반환
-        if not project_key:
+        # 백엔드 API 호출 - 데이터베이스에 저장된 사이클 중 연결 가능한 것들 조회
+        result = api_call(f"/tasks/{task_id}/available-cycles")
+        
+        # API 응답 타입 검증
+        if result is None:
             return []
-        
-        # 1. 먼저 Zephyr 프로젝트 목록에서 해당 프로젝트 ID 찾기
-        zephyr_projects = get_zephyr_projects()
-        project_id = None
-        
-        if isinstance(zephyr_projects, list):
-            for project in zephyr_projects:
-                if project.get('key') == project_key:
-                    project_id = project.get('id')
-                    break
-        
-        if not project_id:
-            st.warning(f"⚠️ Zephyr에서 프로젝트 '{project_key}'를 찾을 수 없습니다.")
+        elif isinstance(result, list):
+            return result
+        elif isinstance(result, dict):
+            # 딕셔너리 응답인 경우 success 필드 확인
+            if result.get("success", True):
+                # 데이터가 있는 경우 반환, 없으면 빈 배열
+                return result.get("data", result.get("cycles", []))
+            else:
+                # API 에러인 경우 빈 배열 반환
+                return []
+        else:
+            # 예상하지 못한 타입인 경우 빈 배열 반환
             return []
-        
-        # 2. Zephyr 관리와 동일한 방식으로 테스트 사이클 조회 (캐시 클리어 후 최신 데이터)
-        st.cache_data.clear()  # 최신 데이터를 위해 캐시 클리어
-        all_cycles = get_zephyr_test_cycles(project_id, limit=100)  # Zephyr 관리와 동일한 limit
-        
-        if not isinstance(all_cycles, list):
-            st.info(f"ℹ️ '{project_key}' 프로젝트에서 사이클을 조회할 수 없습니다.")
-            return []
-        
-        if len(all_cycles) == 0:
-            st.info(f"ℹ️ '{project_key}' 프로젝트에는 테스트 사이클이 없습니다.")
-            return []
-        
-        # 동기화 시간 기록 (Zephyr 관리와 동일)
-        import datetime
-        sync_time = datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-        
-        # 각 사이클에 동기화 시간 추가
-        for cycle in all_cycles:
-            cycle['last_sync'] = sync_time
-        
-        # 3. 이미 연결된 사이클 목록 조회
-        linked_cycles = get_task_linked_cycles(task_id)
-        linked_cycle_ids = []
-        
-        if isinstance(linked_cycles, list):
-            for linked_cycle in linked_cycles:
-                if isinstance(linked_cycle, dict) and linked_cycle.get('id'):
-                    linked_cycle_ids.append(str(linked_cycle.get('id')))
-        
-        # 4. 연결되지 않은 사이클만 필터링
-        available_cycles = []
-        for cycle in all_cycles:
-            if isinstance(cycle, dict) and cycle.get('id'):
-                cycle_id = str(cycle.get('id'))
-                if cycle_id not in linked_cycle_ids:
-                    available_cycles.append(cycle)
-        
-        # 5. Zephyr 관리와 동일한 정렬 (생성순 - 최신순)
-        def extract_cycle_number(cycle):
-            cycle_key = cycle.get('zephyr_cycle_id', '') or cycle.get('cycle_name', '')
-            if cycle_key:
-                try:
-                    # KAN-R-123 형식에서 마지막 숫자 추출
-                    import re
-                    # 다양한 패턴 지원: KAN-R-123, TC-456, CYCLE-789 등
-                    match = re.search(r'-(\d+)$', cycle_key)
-                    if match:
-                        return int(match.group(1))
-                    
-                    # 숫자만 있는 경우
-                    match = re.search(r'(\d+)$', cycle_key)
-                    if match:
-                        return int(match.group(1))
-                        
-                except (ValueError, AttributeError):
-                    pass
-            
-            # 숫자를 찾지 못한 경우 기본값 반환 (가장 낮은 우선순위)
-            return 0
-        
-        available_cycles = sorted(available_cycles, key=extract_cycle_number, reverse=True)
-        
-        # 디버깅 정보 표시
-        st.info(f"🔍 '{project_key}' 프로젝트: 전체 {len(all_cycles)}개 사이클 중 {len(available_cycles)}개 연결 가능")
-        
-        return available_cycles
             
     except Exception as e:
-        st.error(f"연결 가능한 사이클 조회 실패: {str(e)}")
+        # 백엔드 서버 연결 실패 시 빈 배열 반환
+        st.warning(f"⚠️ 데이터베이스에서 사이클 조회 실패: {str(e)}")
         return []
 
 def sync_zephyr_cycles_from_api(project_key):
@@ -1753,3 +1689,30 @@ def sync_zephyr_cycles_from_api(project_key):
     except Exception as e:
         st.error(f"Zephyr 사이클 동기화 실패: {str(e)}")
         return {"success": False, "message": str(e)}
+
+@st.cache_data(ttl=60)  # 1분 캐시
+def get_zephyr_cycles_from_api(project_key):
+    """Zephyr Scale API에서 직접 테스트 사이클 목록 조회 (task_management용)"""
+    try:
+        result = api_call(f"/zephyr/cycles/{project_key}")
+        
+        # API 응답 타입 검증
+        if result is None:
+            return []
+        elif isinstance(result, list):
+            return result
+        elif isinstance(result, dict):
+            # 딕셔너리 응답인 경우 success 필드 확인
+            if result.get("success", True):
+                # 데이터가 있는 경우 반환, 없으면 빈 배열
+                return result.get("data", result.get("cycles", []))
+            else:
+                # API 에러인 경우 빈 배열 반환
+                return []
+        else:
+            # 예상하지 못한 타입인 경우 빈 배열 반환
+            return []
+            
+    except Exception as e:
+        st.error(f"Zephyr 사이클 조회 실패: {str(e)}")
+        return []
