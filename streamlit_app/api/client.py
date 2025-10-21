@@ -900,8 +900,8 @@ def sync_zephyr_test_cycle(project_id, cycle_id, sync_data):
             "message": f"테스트 사이클 동기화 시작 실패: {str(e)}"
         }
 
-def get_zephyr_cycle_executions(cycle_id, skip=0, limit=100):
-    """Zephyr 테스트 사이클의 실행 결과 조회"""
+def get_zephyr_cycle_test_cases(cycle_id, skip=0, limit=100):
+    """Zephyr 테스트 사이클에 할당된 테스트 케이스 목록 조회 - 여러 API 엔드포인트 시도"""
     import os
     from dotenv import load_dotenv
     
@@ -911,40 +911,588 @@ def get_zephyr_cycle_executions(cycle_id, skip=0, limit=100):
     zephyr_api_token = os.getenv('ZEPHYR_API_TOKEN', '')
     
     if not zephyr_api_token:
-        return {"success": False, "message": "ZEPHYR_API_TOKEN이 설정되지 않았습니다."}
+        return []
     
     try:
-        # Zephyr Scale Cloud API 공식 엔드포인트 사용
-        url = "https://api.zephyrscale.smartbear.com/v2/testexecutions"
         headers = {
             "Authorization": f"Bearer {zephyr_api_token}",
             "Accept": "application/json"
         }
         
-        # 쿼리 파라미터 설정
         params = {
-            "testCycle": cycle_id,
             "maxResults": limit,
             "startAt": skip
         }
         
-        response = requests.get(url, headers=headers, params=params, timeout=30, verify=False)
+        # 여러 API 엔드포인트 시도
+        api_endpoints = [
+            f"https://api.zephyrscale.smartbear.com/v2/testcycles/{cycle_id}/testcases",
+            f"https://api.zephyrscale.smartbear.com/v2/testcycles/{cycle_id}/tests",
+            f"https://api.zephyrscale.smartbear.com/v2/testcycles/{cycle_id}",  # 사이클 상세 정보에서 테스트 케이스 정보 추출
+        ]
+        
+        for i, url in enumerate(api_endpoints):
+            response = requests.get(url, headers=headers, params=params, timeout=30, verify=False)
+            
+            if response.status_code == 200:
+                test_cases_data = response.json()
+                
+                if isinstance(test_cases_data, dict):
+                    # 1. values 키가 있는 경우
+                    if "values" in test_cases_data:
+                        test_cases = test_cases_data.get("values", [])
+                        if len(test_cases) > 0:
+                            return format_test_cases(test_cases)
+                    
+                    # 2. testCases 키가 있는 경우
+                    elif "testCases" in test_cases_data:
+                        test_cases = test_cases_data.get("testCases", [])
+                        if len(test_cases) > 0:
+                            return format_test_cases(test_cases)
+                    
+                    # 3. tests 키가 있는 경우
+                    elif "tests" in test_cases_data:
+                        test_cases = test_cases_data.get("tests", [])
+                        if len(test_cases) > 0:
+                            return format_test_cases(test_cases)
+                    
+                    # 4. 사이클 상세 정보인 경우 (세 번째 API)
+                    elif i == 2:  # 사이클 상세 API
+                        # 사이클 정보에서 테스트 관련 정보 추출
+                        cycle_info = test_cases_data
+                        
+                        # 통계 정보 확인
+                        if "testExecutions" in cycle_info:
+                            executions = cycle_info.get("testExecutions", {})
+                            total_tests = executions.get("total", 0)
+                            if total_tests > 0:
+                                # 실제 테스트 케이스 목록은 없지만 통계는 있는 상태
+                                # 다른 방법으로 테스트 케이스 조회 필요
+                                continue
+                
+                elif isinstance(test_cases_data, list):
+                    if len(test_cases_data) > 0:
+                        return format_test_cases(test_cases_data)
+        
+        return []
+            
+    except Exception:
+        return []
+
+
+def format_test_cases(test_cases):
+    """테스트 케이스 목록을 표준 형식으로 변환"""
+    formatted_test_cases = []
+    
+    for test_case in test_cases:
+        try:
+            formatted_test_case = {
+                "id": test_case.get("id"),
+                "key": test_case.get("key", "N/A"),
+                "name": test_case.get("name", "Unknown Test"),
+                "status": test_case.get("status", {}).get("name", "Draft") if isinstance(test_case.get("status"), dict) else str(test_case.get("status", "Draft")),
+                "priority": test_case.get("priority", {}).get("name", "Medium") if isinstance(test_case.get("priority"), dict) else str(test_case.get("priority", "Medium"))
+            }
+            formatted_test_cases.append(formatted_test_case)
+        except Exception:
+            continue
+    
+    return formatted_test_cases
+
+
+def get_zephyr_cycle_executions(cycle_id, skip=0, limit=100):
+    """Zephyr 테스트 사이클의 테스트 실행 결과 조회"""
+    import os
+    from dotenv import load_dotenv
+    
+    # .env 파일 로드
+    load_dotenv()
+    
+    zephyr_api_token = os.getenv('ZEPHYR_API_TOKEN', '')
+    
+    if not zephyr_api_token:
+        return []
+    
+    try:
+        # 1. 먼저 테스트 플레이어(Test Player) API 시도
+        player_url = f"https://api.zephyrscale.smartbear.com/v2/testcycles/{cycle_id}/testexecutions"
+        headers = {
+            "Authorization": f"Bearer {zephyr_api_token}",
+            "Accept": "application/json"
+        }
+        
+        params = {
+            "maxResults": limit,
+            "startAt": skip
+        }
+        
+        response = requests.get(player_url, headers=headers, params=params, timeout=30, verify=False)
         
         if response.status_code == 200:
             executions_data = response.json()
             
-            # API 응답을 내부 형식으로 변환
-            if isinstance(executions_data, dict) and "values" in executions_data:
-                return executions_data.get("values", [])
-            else:
-                return []
-        else:
-            st.error(f"Zephyr 테스트 실행 결과 조회 API 오류: HTTP {response.status_code}")
-            return []
+            if isinstance(executions_data, dict):
+                if "values" in executions_data:
+                    values = executions_data.get("values", [])
+                    return values
+            elif isinstance(executions_data, list):
+                return executions_data
+        
+        # 2. 테스트 플레이어 API가 실패하면 기존 testexecutions API 시도
+        url = "https://api.zephyrscale.smartbear.com/v2/testexecutions"
+        
+        # 여러 파라미터 조합 시도 (가장 일반적인 것부터)
+        param_combinations = [
+            {"testCycle": cycle_id, "maxResults": limit, "startAt": skip},
+            {"testCycleId": cycle_id, "maxResults": limit, "startAt": skip},
+            {"cycleId": cycle_id, "maxResults": limit, "startAt": skip},
+            {"cycle": cycle_id, "maxResults": limit, "startAt": skip}
+        ]
+        
+        for params in param_combinations:
+            response = requests.get(url, headers=headers, params=params, timeout=30, verify=False)
             
-    except Exception as e:
-        st.error(f"Zephyr 테스트 실행 결과 조회 실패: {str(e)}")
+            if response.status_code == 200:
+                executions_data = response.json()
+                
+                # API 응답을 내부 형식으로 변환
+                if isinstance(executions_data, dict):
+                    if "values" in executions_data:
+                        values = executions_data.get("values", [])
+                        return values
+                elif isinstance(executions_data, list):
+                    return executions_data
+        
         return []
+            
+    except Exception:
+        return []
+
+
+def get_cycle_test_results_summary(cycle_id):
+    """사이클의 테스트 결과 요약 정보 조회"""
+    try:
+        # 1. 먼저 테스트 실행 결과를 여러 방법으로 조회
+        executions = []
+        
+        # 방법 1: 기존 함수 사용
+        executions = get_zephyr_cycle_executions(cycle_id, limit=1000)
+        if not isinstance(executions, list):
+            executions = []
+        
+        # 방법 2: 실행 결과가 없으면 직접 API 호출로 다시 시도
+        if len(executions) == 0:
+            import os
+            from dotenv import load_dotenv
+            
+            load_dotenv()
+            zephyr_api_token = os.getenv('ZEPHYR_API_TOKEN', '')
+            
+            if zephyr_api_token:
+                try:
+                    headers = {
+                        "Authorization": f"Bearer {zephyr_api_token}",
+                        "Accept": "application/json"
+                    }
+                    
+                    # 다양한 실행 결과 조회 API 시도 (작동하는 API를 우선순위로)
+                    execution_apis = [
+                        f"https://api.zephyrscale.smartbear.com/v2/testexecutions?cycleId={cycle_id}&maxResults=1000",  # 이 API가 올바른 결과 반환
+                        f"https://api.zephyrscale.smartbear.com/v2/testexecutions?testCycle={cycle_id}&maxResults=1000",
+                        f"https://api.zephyrscale.smartbear.com/v2/testcycles/{cycle_id}/testexecutions?maxResults=1000",
+                        f"https://api.zephyrscale.smartbear.com/v2/testexecutions?cycle={cycle_id}&maxResults=1000"
+                    ]
+                    
+                    for i, api_url in enumerate(execution_apis):
+                        try:
+                            response = requests.get(api_url, headers=headers, timeout=30, verify=False)
+                            
+                            if response.status_code == 200:
+                                data = response.json()
+                                
+                                if isinstance(data, dict):
+                                    if "values" in data:
+                                        potential_executions = data.get("values", [])
+                                        if len(potential_executions) > 0:
+                                            executions = potential_executions
+                                            break
+                                elif isinstance(data, list):
+                                    if len(data) > 0:
+                                        executions = data
+                                        break
+                        except Exception:
+                            continue
+                            
+                except Exception:
+                    pass
+        
+        # 3. 실행 결과가 있는 경우 통계 계산
+        if len(executions) > 0:
+            # 통계 계산
+            total_tests = len(executions)
+            passed_tests = 0
+            failed_tests = 0
+            blocked_tests = 0
+            not_executed_tests = 0
+            
+            test_results = []
+            
+            for i, execution in enumerate(executions):
+                try:
+                    # 첫 번째 실행 결과의 전체 구조를 디버깅으로 출력
+                    if i == 0:
+                        st.info(f"🔍 [디버깅] 첫 번째 실행 결과 전체 구조:")
+                        st.json(execution)
+                    
+                    # 실행 상태 추출 (다양한 필드명 지원)
+                    status_name = "Not Executed"
+                    found_status_field = None
+                    
+                    # 여러 가능한 상태 필드 확인
+                    status_fields = [
+                        "testExecutionStatus",
+                        "executionStatus", 
+                        "status",
+                        "result",
+                        "testResult",
+                        "statusName",
+                        "resultStatus"
+                    ]
+                    
+                    for field in status_fields:
+                        if execution.get(field):
+                            status_obj = execution.get(field)
+                            if isinstance(status_obj, dict):
+                                if status_obj.get("name"):
+                                    status_name = status_obj.get("name")
+                                    found_status_field = f"{field}.name"
+                                    break
+                                elif status_obj.get("status"):
+                                    status_name = status_obj.get("status")
+                                    found_status_field = f"{field}.status"
+                                    break
+                            elif isinstance(status_obj, str):
+                                status_name = status_obj
+                                found_status_field = field
+                                break
+                    
+                    # 첫 번째 실행 결과의 상태 정보 디버깅
+                    if i == 0:
+                        st.info(f"🔍 [디버깅] 상태 추출 결과: '{status_name}' (필드: {found_status_field})")
+                        
+                        # 모든 가능한 상태 필드 값 출력
+                        for field in status_fields:
+                            if execution.get(field):
+                                st.info(f"🔍 [디버깅] {field}: {execution.get(field)}")
+                    
+                    # 상태별 카운트 (대소문자 무시하고 다양한 표현 지원)
+                    status_lower = status_name.lower()
+                    if status_lower in ["pass", "passed", "success", "successful"]:
+                        passed_tests += 1
+                    elif status_lower in ["fail", "failed", "failure", "error"]:
+                        failed_tests += 1
+                    elif status_lower in ["blocked", "block", "skip", "skipped"]:
+                        blocked_tests += 1
+                    else:
+                        not_executed_tests += 1
+                    
+                    # 처음 5개 실행 결과의 상태 분류 디버깅
+                    if i < 5:
+                        st.info(f"🔍 [디버깅] 실행 결과 {i+1}: '{status_name}' → 분류: {'Pass' if status_lower in ['pass', 'passed', 'success', 'successful'] else 'Fail' if status_lower in ['fail', 'failed', 'failure', 'error'] else 'Blocked' if status_lower in ['blocked', 'block', 'skip', 'skipped'] else 'Not Executed'}")
+                    
+                    # 테스트 케이스 정보 추출
+                    test_case = execution.get("testCase", {})
+                    test_case_name = "Unknown Test"
+                    test_case_key = "N/A"
+                    
+                    if isinstance(test_case, dict):
+                        test_case_name = test_case.get("name", "Unknown Test")
+                        test_case_key = test_case.get("key", "N/A")
+                    
+                    # 실행자 정보 추출
+                    executed_by = "Unknown"
+                    executor_fields = ["executedBy", "executor", "assignee", "user"]
+                    
+                    for field in executor_fields:
+                        if execution.get(field):
+                            executed_by_info = execution.get(field)
+                            if isinstance(executed_by_info, dict):
+                                executed_by = executed_by_info.get("displayName", executed_by_info.get("name", "Unknown"))
+                                break
+                            elif isinstance(executed_by_info, str):
+                                executed_by = executed_by_info
+                                break
+                    
+                    # 실행 날짜 추출
+                    executed_on = "N/A"
+                    date_fields = ["executedOn", "executionDate", "completedDate", "updatedOn"]
+                    
+                    for field in date_fields:
+                        if execution.get(field):
+                            executed_on = str(execution.get(field))
+                            break
+                    
+                    test_result = {
+                        "test_case_key": test_case_key,
+                        "test_case_name": test_case_name,
+                        "status": status_name,
+                        "executed_by": executed_by,
+                        "executed_on": executed_on,
+                        "comment": execution.get("comment", execution.get("notes", ""))
+                    }
+                    test_results.append(test_result)
+                    
+                except Exception:
+                    # 개별 실행 결과 처리 실패 시 건너뛰기
+                    continue
+            
+            executed_tests = passed_tests + failed_tests + blocked_tests
+            
+            # 비율 계산
+            pass_rate = (passed_tests / executed_tests * 100) if executed_tests > 0 else 0.0
+            execution_rate = (executed_tests / total_tests * 100) if total_tests > 0 else 0.0
+            
+            return {
+                "total_tests": total_tests,
+                "executed_tests": executed_tests,
+                "passed_tests": passed_tests,
+                "failed_tests": failed_tests,
+                "blocked_tests": blocked_tests,
+                "not_executed_tests": not_executed_tests,
+                "pass_rate": round(pass_rate, 1),
+                "execution_rate": round(execution_rate, 1),
+                "test_results": test_results
+            }
+        
+        # 4. 실행 결과가 없는 경우, 사이클에 할당된 테스트 케이스 직접 조회
+        if len(executions) == 0:
+            # 직접 API 호출로 테스트 케이스 조회
+            import os
+            from dotenv import load_dotenv
+            
+            try:
+                load_dotenv()
+                zephyr_api_token = os.getenv('ZEPHYR_API_TOKEN', '')
+                
+                if not zephyr_api_token:
+                    return {
+                        "total_tests": 0,
+                        "executed_tests": 0,
+                        "passed_tests": 0,
+                        "failed_tests": 0,
+                        "blocked_tests": 0,
+                        "not_executed_tests": 0,
+                        "pass_rate": 0.0,
+                        "execution_rate": 0.0,
+                        "test_results": []
+                    }
+                
+                headers = {
+                    "Authorization": f"Bearer {zephyr_api_token}",
+                    "Accept": "application/json"
+                }
+                
+                # Zephyr Scale Cloud API 공식 문서에 따른 올바른 엔드포인트들
+                api_endpoints = [
+                    # 1. 테스트 사이클에 연결된 테스트 실행 결과 조회 (공식 방법)
+                    f"https://api.zephyrscale.smartbear.com/v2/testexecutions?testCycle={cycle_id}",
+                    # 2. 테스트 사이클 상세 정보 조회 (통계 포함)
+                    f"https://api.zephyrscale.smartbear.com/v2/testcycles/{cycle_id}",
+                    # 3. 테스트 케이스를 사이클 ID로 필터링하여 조회
+                    f"https://api.zephyrscale.smartbear.com/v2/testcases?testCycle={cycle_id}",
+                ]
+                
+                for i, url in enumerate(api_endpoints):
+                    try:
+                        response = requests.get(url, headers=headers, params={"maxResults": 100}, timeout=30, verify=False)
+                        
+                        if response.status_code == 200:
+                            test_cases_data = response.json()
+                            
+                            if isinstance(test_cases_data, dict):
+                                # values 키 확인
+                                if "values" in test_cases_data:
+                                    test_cases = test_cases_data.get("values", [])
+                                    if len(test_cases) > 0:
+                                        return {
+                                            "total_tests": len(test_cases),
+                                            "executed_tests": 0,
+                                            "passed_tests": 0,
+                                            "failed_tests": 0,
+                                            "blocked_tests": 0,
+                                            "not_executed_tests": len(test_cases),
+                                            "pass_rate": 0.0,
+                                            "execution_rate": 0.0,
+                                            "test_results": [],
+                                            "assigned_test_cases": test_cases[:10]
+                                        }
+                                
+                                # testCases 키 확인
+                                elif "testCases" in test_cases_data:
+                                    test_cases = test_cases_data.get("testCases", [])
+                                    if len(test_cases) > 0:
+                                        return {
+                                            "total_tests": len(test_cases),
+                                            "executed_tests": 0,
+                                            "passed_tests": 0,
+                                            "failed_tests": 0,
+                                            "blocked_tests": 0,
+                                            "not_executed_tests": len(test_cases),
+                                            "pass_rate": 0.0,
+                                            "execution_rate": 0.0,
+                                            "test_results": [],
+                                            "assigned_test_cases": test_cases[:10]
+                                        }
+                                
+                                # 사이클 상세 정보인 경우 (두 번째 API)
+                                elif i == 1:  # 사이클 상세 API
+                                    # 통계 정보 확인
+                                    if "testExecutions" in test_cases_data:
+                                        executions_info = test_cases_data.get("testExecutions", {})
+                                        total_tests = executions_info.get("total", 0)
+                                        if total_tests > 0:
+                                            return {
+                                                "total_tests": total_tests,
+                                                "executed_tests": 0,
+                                                "passed_tests": 0,
+                                                "failed_tests": 0,
+                                                "blocked_tests": 0,
+                                                "not_executed_tests": total_tests,
+                                                "pass_rate": 0.0,
+                                                "execution_rate": 0.0,
+                                                "test_results": []
+                                            }
+                            
+                            elif isinstance(test_cases_data, list):
+                                if len(test_cases_data) > 0:
+                                    return {
+                                        "total_tests": len(test_cases_data),
+                                        "executed_tests": 0,
+                                        "passed_tests": 0,
+                                        "failed_tests": 0,
+                                        "blocked_tests": 0,
+                                        "not_executed_tests": len(test_cases_data),
+                                        "pass_rate": 0.0,
+                                        "execution_rate": 0.0,
+                                        "test_results": [],
+                                        "assigned_test_cases": test_cases_data[:10]
+                                    }
+                    
+                    except Exception:
+                        continue
+                
+            except Exception:
+                pass
+            
+            # 할당된 테스트 케이스도 없는 경우
+            return {
+                "total_tests": 0,
+                "executed_tests": 0,
+                "passed_tests": 0,
+                "failed_tests": 0,
+                "blocked_tests": 0,
+                "not_executed_tests": 0,
+                "pass_rate": 0.0,
+                "execution_rate": 0.0,
+                "test_results": []
+            }
+        
+        # 통계 계산
+        total_tests = len(executions)
+        passed_tests = 0
+        failed_tests = 0
+        blocked_tests = 0
+        not_executed_tests = 0
+        
+        test_results = []
+        
+        for execution in executions:
+            try:
+                # 실행 상태 추출
+                status = execution.get("testExecutionStatus", {})
+                status_name = "Not Executed"
+                
+                if isinstance(status, dict):
+                    status_name = status.get("name", "Not Executed")
+                elif isinstance(status, str):
+                    status_name = status
+                
+                # 상태별 카운트
+                if status_name in ["Pass", "Passed", "PASS"]:
+                    passed_tests += 1
+                elif status_name in ["Fail", "Failed", "FAIL"]:
+                    failed_tests += 1
+                elif status_name in ["Blocked", "BLOCKED"]:
+                    blocked_tests += 1
+                else:
+                    not_executed_tests += 1
+                
+                # 테스트 케이스 정보 추출
+                test_case = execution.get("testCase", {})
+                test_case_name = "Unknown Test"
+                test_case_key = "N/A"
+                
+                if isinstance(test_case, dict):
+                    test_case_name = test_case.get("name", "Unknown Test")
+                    test_case_key = test_case.get("key", "N/A")
+                
+                # 실행자 정보 추출
+                executed_by = "Unknown"
+                if execution.get("executedBy"):
+                    executed_by_info = execution.get("executedBy")
+                    if isinstance(executed_by_info, dict):
+                        executed_by = executed_by_info.get("displayName", "Unknown")
+                    elif isinstance(executed_by_info, str):
+                        executed_by = executed_by_info
+                
+                # 실행 날짜 추출
+                executed_on = execution.get("executedOn", "N/A")
+                
+                test_result = {
+                    "test_case_key": test_case_key,
+                    "test_case_name": test_case_name,
+                    "status": status_name,
+                    "executed_by": executed_by,
+                    "executed_on": executed_on,
+                    "comment": execution.get("comment", "")
+                }
+                test_results.append(test_result)
+                
+            except Exception as e:
+                # 개별 실행 결과 처리 실패 시 건너뛰기
+                continue
+        
+        executed_tests = passed_tests + failed_tests + blocked_tests
+        
+        # 비율 계산
+        pass_rate = (passed_tests / executed_tests * 100) if executed_tests > 0 else 0.0
+        execution_rate = (executed_tests / total_tests * 100) if total_tests > 0 else 0.0
+        
+        return {
+            "total_tests": total_tests,
+            "executed_tests": executed_tests,
+            "passed_tests": passed_tests,
+            "failed_tests": failed_tests,
+            "blocked_tests": blocked_tests,
+            "not_executed_tests": not_executed_tests,
+            "pass_rate": round(pass_rate, 1),
+            "execution_rate": round(execution_rate, 1),
+            "test_results": test_results
+        }
+        
+    except Exception as e:
+        st.error(f"사이클 테스트 결과 요약 조회 실패: {str(e)}")
+        return {
+            "total_tests": 0,
+            "executed_tests": 0,
+            "passed_tests": 0,
+            "failed_tests": 0,
+            "blocked_tests": 0,
+            "not_executed_tests": 0,
+            "pass_rate": 0.0,
+            "execution_rate": 0.0,
+            "test_results": []
+        }
 
 
 # QA 요청서 관련 API 함수들
@@ -998,3 +1546,210 @@ def delete_qa_request(request_id):
         # QA 요청서 삭제 후 캐시 클리어
         st.cache_data.clear()
     return result
+
+
+# Task와 Cycle 연동 관련 API 함수들
+@st.cache_data(ttl=1)  # 1초 캐시로 단축 (실시간성 극대화)
+def get_task_linked_cycles(task_id):
+    """Task에 연결된 Zephyr 테스트 사이클 목록 조회 - 백엔드 서버 없이 임시 구현"""
+    try:
+        # 백엔드 서버가 없는 경우를 위한 임시 구현
+        # 실제로는 데이터베이스나 파일에서 연결 정보를 조회해야 함
+        # 현재는 빈 배열을 반환하여 모든 사이클이 연결 가능한 것으로 표시
+        
+        # 백엔드 API 호출 시도
+        endpoint = f"/tasks/{task_id}/linked-cycles"
+        result = api_call(endpoint)
+        
+        # API 응답 타입 검증
+        if result is None:
+            return []
+        elif isinstance(result, list):
+            return result
+        elif isinstance(result, dict):
+            # 딕셔너리 응답인 경우 success 필드 확인
+            if result.get("success", True):
+                # 데이터가 있는 경우 반환, 없으면 빈 배열
+                return result.get("data", result.get("cycles", []))
+            else:
+                # API 에러인 경우 빈 배열 반환
+                return []
+        elif isinstance(result, str):
+            # 문자열 응답인 경우 (에러 메시지 등) 빈 배열 반환
+            return []
+        else:
+            # 예상하지 못한 타입인 경우 빈 배열 반환
+            return []
+            
+    except Exception as e:
+        # 백엔드 서버 연결 실패 시 빈 배열 반환 (에러 메시지 없이)
+        # 이렇게 하면 모든 사이클이 연결 가능한 것으로 표시됨
+        return []
+
+@st.cache_data(ttl=60)  # 1분 캐시
+def get_cycles_for_project(project_key):
+    """프로젝트의 모든 Zephyr 테스트 사이클 조회 (간소화된 정보) - 사용하지 않음, get_available_cycles_for_task 사용"""
+    # 이 함수는 더 이상 사용하지 않음
+    # get_available_cycles_for_task 함수가 모든 프로젝트에서 사이클을 조회하므로 이 함수는 빈 배열 반환
+    return []
+
+def link_task_to_cycle(task_id, cycle_id, cycle_name="", linked_by="QA팀", link_reason=""):
+    """Task와 Zephyr 테스트 사이클 연결"""
+    try:
+        # URL 파라미터로 전달하도록 수정 (사이클 이름 추가)
+        import urllib.parse
+        encoded_cycle_name = urllib.parse.quote(cycle_name) if cycle_name else ""
+        encoded_link_reason = urllib.parse.quote(link_reason) if link_reason else ""
+        
+        params = f"?task_id={task_id}&cycle_id={cycle_id}&cycle_name={encoded_cycle_name}&linked_by={linked_by}&link_reason={encoded_link_reason}"
+        result = api_call(f"/tasks/link-cycle{params}", method="POST")
+        
+        # API 응답 타입 검증
+        if result is None:
+            return {"success": False, "message": "API 응답이 없습니다."}
+        elif isinstance(result, dict):
+            if result.get("success", True):
+                # 연결 후 캐시 클리어
+                st.cache_data.clear()
+            return result
+        elif isinstance(result, str):
+            # 문자열 응답인 경우 에러로 처리
+            return {"success": False, "message": result}
+        else:
+            # 예상하지 못한 타입인 경우
+            return {"success": False, "message": f"예상하지 못한 응답 타입: {type(result)}"}
+            
+    except Exception as e:
+        st.error(f"Task-Cycle 연결 실패: {str(e)}")
+        return {"success": False, "message": str(e)}
+
+def unlink_task_from_cycle(task_id, cycle_id):
+    """Task와 Zephyr 테스트 사이클 연결 해제"""
+    try:
+        result = api_call(f"/tasks/{task_id}/unlink-cycle/{cycle_id}", method="DELETE")
+        
+        # API 응답 타입 검증
+        if result is None:
+            return {"success": False, "message": "API 응답이 없습니다."}
+        elif isinstance(result, dict):
+            if result.get("success", True):
+                # 연결 해제 후 캐시 클리어
+                st.cache_data.clear()
+            return result
+        elif isinstance(result, str):
+            # 문자열 응답인 경우 에러로 처리
+            return {"success": False, "message": result}
+        else:
+            # 예상하지 못한 타입인 경우
+            return {"success": False, "message": f"예상하지 못한 응답 타입: {type(result)}"}
+            
+    except Exception as e:
+        st.error(f"Task-Cycle 연결 해제 실패: {str(e)}")
+        return {"success": False, "message": str(e)}
+
+def get_available_cycles_for_task(task_id, project_key=None):
+    """Task에 연결 가능한 사이클 목록 조회 (이미 연결된 사이클 제외) - Zephyr 관리와 동일한 로직 사용"""
+    try:
+        # 프로젝트 키가 없으면 빈 배열 반환
+        if not project_key:
+            return []
+        
+        # 1. 먼저 Zephyr 프로젝트 목록에서 해당 프로젝트 ID 찾기
+        zephyr_projects = get_zephyr_projects()
+        project_id = None
+        
+        if isinstance(zephyr_projects, list):
+            for project in zephyr_projects:
+                if project.get('key') == project_key:
+                    project_id = project.get('id')
+                    break
+        
+        if not project_id:
+            st.warning(f"⚠️ Zephyr에서 프로젝트 '{project_key}'를 찾을 수 없습니다.")
+            return []
+        
+        # 2. Zephyr 관리와 동일한 방식으로 테스트 사이클 조회 (캐시 클리어 후 최신 데이터)
+        st.cache_data.clear()  # 최신 데이터를 위해 캐시 클리어
+        all_cycles = get_zephyr_test_cycles(project_id, limit=100)  # Zephyr 관리와 동일한 limit
+        
+        if not isinstance(all_cycles, list):
+            st.info(f"ℹ️ '{project_key}' 프로젝트에서 사이클을 조회할 수 없습니다.")
+            return []
+        
+        if len(all_cycles) == 0:
+            st.info(f"ℹ️ '{project_key}' 프로젝트에는 테스트 사이클이 없습니다.")
+            return []
+        
+        # 동기화 시간 기록 (Zephyr 관리와 동일)
+        import datetime
+        sync_time = datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+        
+        # 각 사이클에 동기화 시간 추가
+        for cycle in all_cycles:
+            cycle['last_sync'] = sync_time
+        
+        # 3. 이미 연결된 사이클 목록 조회
+        linked_cycles = get_task_linked_cycles(task_id)
+        linked_cycle_ids = []
+        
+        if isinstance(linked_cycles, list):
+            for linked_cycle in linked_cycles:
+                if isinstance(linked_cycle, dict) and linked_cycle.get('id'):
+                    linked_cycle_ids.append(str(linked_cycle.get('id')))
+        
+        # 4. 연결되지 않은 사이클만 필터링
+        available_cycles = []
+        for cycle in all_cycles:
+            if isinstance(cycle, dict) and cycle.get('id'):
+                cycle_id = str(cycle.get('id'))
+                if cycle_id not in linked_cycle_ids:
+                    available_cycles.append(cycle)
+        
+        # 5. Zephyr 관리와 동일한 정렬 (생성순 - 최신순)
+        def extract_cycle_number(cycle):
+            cycle_key = cycle.get('zephyr_cycle_id', '') or cycle.get('cycle_name', '')
+            if cycle_key:
+                try:
+                    # KAN-R-123 형식에서 마지막 숫자 추출
+                    import re
+                    # 다양한 패턴 지원: KAN-R-123, TC-456, CYCLE-789 등
+                    match = re.search(r'-(\d+)$', cycle_key)
+                    if match:
+                        return int(match.group(1))
+                    
+                    # 숫자만 있는 경우
+                    match = re.search(r'(\d+)$', cycle_key)
+                    if match:
+                        return int(match.group(1))
+                        
+                except (ValueError, AttributeError):
+                    pass
+            
+            # 숫자를 찾지 못한 경우 기본값 반환 (가장 낮은 우선순위)
+            return 0
+        
+        available_cycles = sorted(available_cycles, key=extract_cycle_number, reverse=True)
+        
+        # 디버깅 정보 표시
+        st.info(f"🔍 '{project_key}' 프로젝트: 전체 {len(all_cycles)}개 사이클 중 {len(available_cycles)}개 연결 가능")
+        
+        return available_cycles
+            
+    except Exception as e:
+        st.error(f"연결 가능한 사이클 조회 실패: {str(e)}")
+        return []
+
+def sync_zephyr_cycles_from_api(project_key):
+    """Zephyr Scale API에서 실제 테스트 사이클 데이터를 동기화"""
+    try:
+        result = api_call(f"/zephyr/sync-cycles/{project_key}", method="POST")
+        
+        if result and result.get("success", True):
+            # 동기화 후 캐시 클리어
+            st.cache_data.clear()
+        
+        return result
+        
+    except Exception as e:
+        st.error(f"Zephyr 사이클 동기화 실패: {str(e)}")
+        return {"success": False, "message": str(e)}

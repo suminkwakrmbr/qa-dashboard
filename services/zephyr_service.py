@@ -18,7 +18,7 @@ import os
 
 from models.database_models import (
     ZephyrConnection, ZephyrProject, ZephyrTestCase, 
-    ZephyrTestExecution, ZephyrSyncHistory
+    ZephyrTestExecution, ZephyrSyncHistory, ZephyrTestCycle
 )
 from models.pydantic_models import (
     ZephyrConnectionCreate, ZephyrConnectionUpdate, ZephyrConnectionResponse,
@@ -501,6 +501,265 @@ class ZephyrService:
         
         return str(description_field)
     
+    def sync_test_cycles_from_zephyr(self, db: Session, project_key: str) -> Dict[str, Any]:
+        """Zephyr Scale API에서 실제 테스트 사이클 데이터를 가져와서 데이터베이스에 저장"""
+        try:
+            # 프로젝트 조회 또는 생성
+            zephyr_project = db.query(ZephyrProject).filter(
+                ZephyrProject.project_key == project_key
+            ).first()
+            
+            if not zephyr_project:
+                # 새 프로젝트 생성
+                zephyr_project = ZephyrProject(
+                    zephyr_project_id=f"zephyr_{project_key.lower()}",
+                    project_key=project_key,
+                    project_name=f"{project_key} 프로젝트",
+                    description=f"{project_key} 프로젝트의 테스트 관리",
+                    is_synced=False,
+                    sync_status="syncing"
+                )
+                db.add(zephyr_project)
+                db.commit()
+                db.refresh(zephyr_project)
+            
+            # Zephyr Scale API에서 프로젝트 ID 조회
+            zephyr_project_id = self._get_zephyr_project_id(project_key)
+            if not zephyr_project_id:
+                raise Exception(f"Zephyr Scale에서 프로젝트 '{project_key}'를 찾을 수 없습니다.")
+            
+            # 테스트 사이클 조회
+            cycles_data = self._fetch_test_cycles_from_api(zephyr_project_id)
+            
+            synced_cycles = 0
+            for cycle_data in cycles_data:
+                try:
+                    # 기존 사이클 확인
+                    existing_cycle = db.query(ZephyrTestCycle).filter(
+                        and_(
+                            ZephyrTestCycle.zephyr_project_id == zephyr_project.id,
+                            ZephyrTestCycle.zephyr_cycle_id == cycle_data["id"]
+                        )
+                    ).first()
+                    
+                    if existing_cycle:
+                        # 기존 사이클 업데이트
+                        existing_cycle.cycle_name = cycle_data.get("name", "이름 없음")
+                        existing_cycle.description = cycle_data.get("description", "")
+                        existing_cycle.status = cycle_data.get("statusName", "Not Started")
+                        existing_cycle.version = self._safe_get_name(cycle_data.get("version"))
+                        existing_cycle.environment = self._safe_get_name(cycle_data.get("environment"))
+                        existing_cycle.build = cycle_data.get("build", "")
+                        existing_cycle.start_date = self._parse_date(cycle_data.get("plannedStartDate"))
+                        existing_cycle.end_date = self._parse_date(cycle_data.get("plannedEndDate"))
+                        existing_cycle.created_by = self._safe_get_author(cycle_data)
+                        existing_cycle.assigned_to = self._safe_get_owner(cycle_data)
+                        existing_cycle.last_sync = datetime.now()
+                        
+                        # 테스트 실행 통계 업데이트
+                        self._update_cycle_statistics(existing_cycle, cycle_data)
+                    else:
+                        # 새 사이클 생성
+                        new_cycle = ZephyrTestCycle(
+                            zephyr_cycle_id=cycle_data["id"],
+                            zephyr_project_id=zephyr_project.id,
+                            cycle_name=cycle_data.get("name", "이름 없음"),
+                            description=cycle_data.get("description", ""),
+                            status=cycle_data.get("statusName", "Not Started"),
+                            version=self._safe_get_name(cycle_data.get("version")),
+                            environment=self._safe_get_name(cycle_data.get("environment")),
+                            build=cycle_data.get("build", ""),
+                            start_date=self._parse_date(cycle_data.get("plannedStartDate")),
+                            end_date=self._parse_date(cycle_data.get("plannedEndDate")),
+                            created_by=self._safe_get_author(cycle_data),
+                            assigned_to=self._safe_get_owner(cycle_data),
+                            last_sync=datetime.now()
+                        )
+                        
+                        # 테스트 실행 통계 설정
+                        self._update_cycle_statistics(new_cycle, cycle_data)
+                        
+                        db.add(new_cycle)
+                    
+                    synced_cycles += 1
+                    
+                except Exception as e:
+                    logger.error(f"사이클 처리 실패 {cycle_data.get('id', 'Unknown')}: {str(e)}")
+                    continue
+            
+            # 프로젝트 동기화 상태 업데이트
+            zephyr_project.is_synced = True
+            zephyr_project.sync_status = "completed"
+            zephyr_project.last_sync = datetime.now()
+            
+            db.commit()
+            
+            return {
+                "success": True,
+                "message": f"프로젝트 '{project_key}'의 테스트 사이클 {synced_cycles}개가 동기화되었습니다.",
+                "synced_cycles": synced_cycles,
+                "project_id": zephyr_project.id
+            }
+            
+        except Exception as e:
+            db.rollback()
+            logger.error(f"Zephyr 테스트 사이클 동기화 실패: {str(e)}")
+            
+            # 프로젝트 상태를 실패로 업데이트
+            if 'zephyr_project' in locals():
+                zephyr_project.sync_status = "failed"
+                zephyr_project.sync_error = str(e)
+                db.commit()
+            
+            raise Exception(f"테스트 사이클 동기화 실패: {str(e)}")
+    
+    def _get_zephyr_project_id(self, project_key: str) -> Optional[str]:
+        """Zephyr Scale API에서 프로젝트 ID 조회"""
+        try:
+            url = "https://api.zephyrscale.smartbear.com/v2/projects"
+            headers = {
+                "Authorization": f"Bearer {self.default_api_token}",
+                "Accept": "application/json"
+            }
+            
+            response = requests.get(url, headers=headers, timeout=30, verify=False)
+            
+            if response.status_code == 200:
+                projects_data = response.json()
+                
+                # 프로젝트 키로 검색
+                if isinstance(projects_data, list):
+                    for project in projects_data:
+                        if project.get("key") == project_key:
+                            return project.get("id")
+                elif isinstance(projects_data, dict) and "values" in projects_data:
+                    for project in projects_data["values"]:
+                        if project.get("key") == project_key:
+                            return project.get("id")
+            
+            return None
+            
+        except Exception as e:
+            logger.error(f"Zephyr 프로젝트 ID 조회 실패: {str(e)}")
+            return None
+    
+    def _fetch_test_cycles_from_api(self, project_id: str) -> List[Dict[str, Any]]:
+        """Zephyr Scale API에서 테스트 사이클 목록 조회"""
+        try:
+            all_cycles = []
+            current_skip = 0
+            max_results_per_request = 100
+            
+            while True:
+                url = "https://api.zephyrscale.smartbear.com/v2/testcycles"
+                headers = {
+                    "Authorization": f"Bearer {self.default_api_token}",
+                    "Accept": "application/json"
+                }
+                
+                params = {
+                    "projectId": project_id,
+                    "maxResults": max_results_per_request,
+                    "startAt": current_skip
+                }
+                
+                response = requests.get(url, headers=headers, params=params, timeout=30, verify=False)
+                
+                if response.status_code == 200:
+                    cycles_data = response.json()
+                    
+                    if isinstance(cycles_data, dict) and "values" in cycles_data:
+                        batch_cycles = cycles_data.get("values", [])
+                        
+                        if not batch_cycles:
+                            break
+                        
+                        all_cycles.extend(batch_cycles)
+                        current_skip += max_results_per_request
+                        
+                        if len(batch_cycles) < max_results_per_request:
+                            break
+                    else:
+                        break
+                else:
+                    logger.error(f"Zephyr API 오류: HTTP {response.status_code}")
+                    break
+            
+            return all_cycles
+            
+        except Exception as e:
+            logger.error(f"Zephyr 테스트 사이클 API 조회 실패: {str(e)}")
+            return []
+    
+    def _safe_get_name(self, field) -> str:
+        """안전하게 name 필드 추출"""
+        if not field:
+            return "N/A"
+        if isinstance(field, dict):
+            return field.get("name", "N/A")
+        return str(field)
+    
+    def _safe_get_author(self, data) -> str:
+        """안전하게 작성자 정보 추출"""
+        try:
+            if data.get("createdBy"):
+                created_by = data.get("createdBy")
+                if isinstance(created_by, dict):
+                    return created_by.get("displayName", "알 수 없음")
+                return str(created_by)
+            return "알 수 없음"
+        except:
+            return "알 수 없음"
+    
+    def _safe_get_owner(self, data) -> str:
+        """안전하게 소유자 정보 추출"""
+        try:
+            if data.get("owner"):
+                owner = data.get("owner")
+                if isinstance(owner, dict):
+                    return owner.get("displayName", "미할당")
+                return str(owner)
+            return "미할당"
+        except:
+            return "미할당"
+    
+    def _parse_date(self, date_str) -> Optional[datetime]:
+        """날짜 문자열을 datetime 객체로 변환"""
+        if not date_str:
+            return None
+        try:
+            # ISO 8601 형식 파싱
+            from dateutil import parser
+            return parser.parse(date_str)
+        except:
+            return None
+    
+    def _update_cycle_statistics(self, cycle: 'ZephyrTestCycle', cycle_data: Dict[str, Any]):
+        """사이클 통계 정보 업데이트"""
+        try:
+            # 기본값 설정
+            cycle.total_test_cases = 0
+            cycle.executed_test_cases = 0
+            cycle.passed_test_cases = 0
+            cycle.failed_test_cases = 0
+            cycle.blocked_test_cases = 0
+            
+            # API에서 통계 정보 추출 (실제 API 응답 구조에 따라 조정 필요)
+            if cycle_data.get("testExecutions"):
+                executions = cycle_data.get("testExecutions", {})
+                cycle.total_test_cases = executions.get("total", 0)
+                cycle.passed_test_cases = executions.get("passed", 0)
+                cycle.failed_test_cases = executions.get("failed", 0)
+                cycle.blocked_test_cases = executions.get("blocked", 0)
+                cycle.executed_test_cases = (
+                    cycle.passed_test_cases + 
+                    cycle.failed_test_cases + 
+                    cycle.blocked_test_cases
+                )
+            
+        except Exception as e:
+            logger.error(f"사이클 통계 업데이트 실패: {str(e)}")
+
     def get_dashboard_stats(self, db: Session) -> ZephyrDashboardStats:
         """Zephyr 대시보드 통계 조회"""
         try:

@@ -328,3 +328,26 @@ class ZephyrSyncHistory(Base):
     
     def __repr__(self):
         return f"<ZephyrSyncHistory(id={self.id}, direction={self.sync_direction}, status={self.sync_status})>"
+
+
+class TaskCycleLink(Base):
+    """Task와 Zephyr 테스트 사이클 연결 모델"""
+    __tablename__ = "task_cycle_links"
+    
+    id = Column(Integer, primary_key=True, index=True)
+    task_id = Column(Integer, ForeignKey("tasks.id"), nullable=False)
+    zephyr_cycle_id = Column(Integer, ForeignKey("zephyr_test_cycles.id"), nullable=True)  # 기존 DB 연결용
+    zephyr_cycle_external_id = Column(String(50), nullable=True)  # 외부 Zephyr ID 직접 저장용
+    cycle_name = Column(String(255), nullable=True)  # 사이클 이름 저장 (표시용)
+    linked_by = Column(String(100))  # 연결한 사용자
+    link_reason = Column(Text)  # 연결 이유/메모
+    is_active = Column(Boolean, default=True)  # 활성 상태
+    created_at = Column(DateTime(timezone=True), server_default=func.now())
+    updated_at = Column(DateTime(timezone=True), onupdate=func.now())
+    
+    # 관계 설정
+    task = relationship("Task")
+    zephyr_cycle = relationship("ZephyrTestCycle")
+    
+    def __repr__(self):
+        return f"<TaskCycleLink(id={self.id}, task_id={self.task_id}, external_id={self.zephyr_cycle_external_id})>"

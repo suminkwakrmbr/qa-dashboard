@@ -978,10 +978,10 @@ def show_project_test_cycles(project):
 
 
 def load_test_cycles_for_project(project_id, project_name):
-    """프로젝트의 테스트 사이클 로드 (실제 Zephyr API 사용)"""
-    with st.spinner(f"'{project_name}' 테스트 사이클 조회 중..."):
+    """프로젝트의 테스트 사이클 로드 및 데이터베이스 저장"""
+    with st.spinner(f"'{project_name}' 테스트 사이클 조회 및 저장 중..."):
         try:
-            from streamlit_app.api.client import get_zephyr_test_cycles
+            from streamlit_app.api.client import get_zephyr_test_cycles, sync_zephyr_cycles_from_api
             
             # 실제 Zephyr API에서 테스트 사이클 조회
             cycles = get_zephyr_test_cycles(project_id, limit=100)
@@ -995,8 +995,27 @@ def load_test_cycles_for_project(project_id, project_name):
                 for cycle in cycles:
                     cycle['last_sync'] = sync_time
                 
+                # 세션 상태에 저장
                 st.session_state[f"test_cycles_{project_id}"] = cycles
-                st.success(f"✅ {len(cycles)}개 테스트 사이클 조회 완료!")
+                
+                # 글로벌 사이클 저장소에도 저장 (작업 관리에서 사용할 수 있도록)
+                if 'global_zephyr_cycles' not in st.session_state:
+                    st.session_state.global_zephyr_cycles = {}
+                
+                # 프로젝트 키 찾기
+                project_key = None
+                zephyr_projects = st.session_state.get('zephyr_projects', [])
+                for proj in zephyr_projects:
+                    if proj.get('id') == project_id:
+                        project_key = proj.get('key')
+                        break
+                
+                if project_key:
+                    # 글로벌 저장소에 저장
+                    st.session_state.global_zephyr_cycles[project_key] = cycles
+                    st.success(f"✅ {len(cycles)}개 테스트 사이클 조회 완료! (작업 관리에서 사용 가능)")
+                else:
+                    st.success(f"✅ {len(cycles)}개 테스트 사이클 조회 완료!")
                 
                 if len(cycles) == 0:
                     st.info("ℹ️ 이 프로젝트에는 테스트 사이클이 없습니다.")

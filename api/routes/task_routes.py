@@ -239,3 +239,292 @@ async def get_dashboard_stats(db: Session = Depends(get_db)):
     except Exception as e:
         logger.error(f"대시보드 통계 조회 오류: {str(e)}")
         raise HTTPException(status_code=500, detail=f"통계 조회 실패: {str(e)}")
+
+
+@router.get("/{task_id}/linked-cycles")
+async def get_task_linked_cycles(task_id: int, db: Session = Depends(get_db)):
+    """Task에 연결된 Zephyr 테스트 사이클 목록 조회"""
+    try:
+        from models.database_models import TaskCycleLink, ZephyrTestCycle
+        from sqlalchemy.orm import joinedload
+        from sqlalchemy import and_
+        
+        # Task 존재 확인
+        task = task_service.get_task_by_id(db, task_id)
+        if not task:
+            raise HTTPException(status_code=404, detail="작업을 찾을 수 없습니다.")
+        
+        # 연결된 사이클 조회
+        active_links = db.query(TaskCycleLink).filter(
+            and_(
+                TaskCycleLink.task_id == task_id,
+                TaskCycleLink.is_active == True
+            )
+        ).all()
+        
+        # 응답 데이터 구성
+        result = []
+        for link in active_links:
+            # 외부 Zephyr ID를 사용하는 새로운 연결 방식
+            if link.zephyr_cycle_external_id:
+                # 외부 ID를 사용한 연결 (새로운 방식)
+                cycle_data = {
+                    "id": link.zephyr_cycle_external_id,  # 외부 Zephyr ID 사용
+                    "zephyr_cycle_id": link.zephyr_cycle_external_id,
+                    "cycle_name": link.cycle_name or f"Cycle {link.zephyr_cycle_external_id}",
+                    "description": "외부 Zephyr 사이클",
+                    "version": "N/A",
+                    "environment": "N/A", 
+                    "build": "N/A",
+                    "status": "Connected",
+                    "created_by": "N/A",
+                    "assigned_to": "N/A",
+                    "start_date": "N/A",
+                    "end_date": "N/A",
+                    "total_test_cases": 0,
+                    "executed_test_cases": 0,
+                    "passed_test_cases": 0,
+                    "failed_test_cases": 0,
+                    "blocked_test_cases": 0,
+                    "created_at": "N/A",
+                    "last_sync": "N/A",
+                    # 연결 정보
+                    "linked_by": link.linked_by or "N/A",
+                    "link_reason": link.link_reason or "",
+                    "linked_at": link.created_at.isoformat() if link.created_at else "N/A"
+                }
+                result.append(cycle_data)
+            elif link.zephyr_cycle_id:
+                # 기존 DB 연결 방식 (하위 호환성)
+                cycle = db.query(ZephyrTestCycle).filter(ZephyrTestCycle.id == link.zephyr_cycle_id).first()
+                
+                if cycle:
+                    cycle_data = {
+                        "id": str(cycle.id),
+                        "zephyr_cycle_id": cycle.zephyr_cycle_id,
+                        "cycle_name": cycle.cycle_name,
+                        "description": cycle.description or "",
+                        "version": cycle.version or "N/A",
+                        "environment": cycle.environment or "N/A",
+                        "build": cycle.build or "N/A",
+                        "status": cycle.status,
+                        "created_by": cycle.created_by or "N/A",
+                        "assigned_to": cycle.assigned_to or "N/A",
+                        "start_date": cycle.start_date.isoformat() if cycle.start_date else "N/A",
+                        "end_date": cycle.end_date.isoformat() if cycle.end_date else "N/A",
+                        "total_test_cases": cycle.total_test_cases,
+                        "executed_test_cases": cycle.executed_test_cases,
+                        "passed_test_cases": cycle.passed_test_cases,
+                        "failed_test_cases": cycle.failed_test_cases,
+                        "blocked_test_cases": cycle.blocked_test_cases,
+                        "created_at": cycle.created_at.isoformat() if cycle.created_at else "N/A",
+                        "last_sync": cycle.last_sync.isoformat() if cycle.last_sync else "N/A",
+                        # 연결 정보
+                        "linked_by": link.linked_by or "N/A",
+                        "link_reason": link.link_reason or "",
+                        "linked_at": link.created_at.isoformat() if link.created_at else "N/A"
+                    }
+                    result.append(cycle_data)
+        
+        return result
+        
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"연결된 사이클 조회 오류: {str(e)}")
+        raise HTTPException(status_code=500, detail=f"연결된 사이클 조회 실패: {str(e)}")
+
+
+@router.post("/link-cycle", response_model=BaseResponse)
+async def link_task_to_cycle(
+    task_id: int = Query(..., description="Task ID"),
+    cycle_id: str = Query(..., description="Cycle ID"),
+    cycle_name: str = Query("", description="Cycle Name"),
+    linked_by: str = Query("QA팀", description="연결한 사용자"),
+    link_reason: str = Query("", description="연결 이유"),
+    db: Session = Depends(get_db)
+):
+    """Task와 Zephyr 테스트 사이클 연결"""
+    try:
+        from models.database_models import TaskCycleLink, ZephyrTestCycle
+        
+        # Task 존재 확인
+        task = task_service.get_task_by_id(db, task_id)
+        if not task:
+            raise HTTPException(status_code=404, detail="작업을 찾을 수 없습니다.")
+        
+        # 프론트엔드에서 전달받은 사이클 정보로 직접 연결 (데이터베이스 의존성 제거)
+        logger.info(f"사이클 ID '{cycle_id}' (이름: '{cycle_name}') 직접 연결 시도...")
+        
+        # 이미 연결되어 있는지 확인 (Zephyr 사이클 ID로 직접 확인)
+        existing_link = db.query(TaskCycleLink).filter(
+            TaskCycleLink.task_id == task_id,
+            TaskCycleLink.zephyr_cycle_external_id == cycle_id,
+            TaskCycleLink.is_active == True
+        ).first()
+        
+        if existing_link:
+            raise HTTPException(status_code=400, detail="이미 연결된 사이클입니다.")
+        
+        # 새로운 연결 생성 (외부 Zephyr ID 직접 저장)
+        new_link = TaskCycleLink(
+            task_id=task_id,
+            zephyr_cycle_id=None,  # 기존 DB 연결은 None으로 설정
+            zephyr_cycle_external_id=cycle_id,  # 외부 Zephyr ID 직접 저장
+            cycle_name=cycle_name or f"Cycle {cycle_id}",  # 사이클 이름 저장
+            linked_by=linked_by,
+            link_reason=link_reason,
+            is_active=True
+        )
+        
+        db.add(new_link)
+        db.commit()
+        db.refresh(new_link)
+        
+        return BaseResponse(
+            success=True,
+            message=f"Task '{task.jira_key}'와 Cycle '{cycle_name or cycle_id}'이(가) 성공적으로 연결되었습니다."
+        )
+        
+    except HTTPException:
+        raise
+    except Exception as e:
+        db.rollback()
+        logger.error(f"Task-Cycle 연결 오류: {str(e)}")
+        raise HTTPException(status_code=500, detail=f"Task-Cycle 연결 실패: {str(e)}")
+
+
+@router.delete("/{task_id}/unlink-cycle/{cycle_id}", response_model=BaseResponse)
+async def unlink_task_from_cycle(
+    task_id: int,
+    cycle_id: str,
+    db: Session = Depends(get_db)
+):
+    """Task와 Zephyr 테스트 사이클 연결 해제"""
+    try:
+        from models.database_models import TaskCycleLink, ZephyrTestCycle
+        
+        # Task 존재 확인
+        task = task_service.get_task_by_id(db, task_id)
+        if not task:
+            raise HTTPException(status_code=404, detail="작업을 찾을 수 없습니다.")
+        
+        # 연결 정보 조회 (외부 ID 우선, 기존 DB ID 후순위)
+        link = db.query(TaskCycleLink).filter(
+            TaskCycleLink.task_id == task_id,
+            TaskCycleLink.zephyr_cycle_external_id == cycle_id,
+            TaskCycleLink.is_active == True
+        ).first()
+        
+        # 외부 ID로 찾지 못한 경우 기존 DB ID로 시도
+        if not link:
+            try:
+                cycle_id_int = int(cycle_id)
+                link = db.query(TaskCycleLink).filter(
+                    TaskCycleLink.task_id == task_id,
+                    TaskCycleLink.zephyr_cycle_id == cycle_id_int,
+                    TaskCycleLink.is_active == True
+                ).first()
+            except ValueError:
+                pass  # 정수 변환 실패 시 무시
+        
+        if not link:
+            raise HTTPException(status_code=404, detail="연결된 사이클을 찾을 수 없습니다.")
+        
+        # 사이클 이름 결정
+        cycle_name = link.cycle_name or f"ID {cycle_id}"
+        
+        # 기존 DB 사이클인 경우 추가 정보 조회
+        if link.zephyr_cycle_id:
+            zephyr_cycle = db.query(ZephyrTestCycle).filter(
+                ZephyrTestCycle.id == link.zephyr_cycle_id
+            ).first()
+            if zephyr_cycle:
+                cycle_name = zephyr_cycle.cycle_name
+        
+        # 연결 해제 (소프트 삭제 - is_active를 False로 설정)
+        link.is_active = False
+        db.commit()
+        
+        return BaseResponse(
+            success=True,
+            message=f"Task '{task.jira_key}'와 Cycle '{cycle_name}'의 연결이 해제되었습니다."
+        )
+        
+    except HTTPException:
+        raise
+    except Exception as e:
+        db.rollback()
+        logger.error(f"Task-Cycle 연결 해제 오류: {str(e)}")
+        raise HTTPException(status_code=500, detail=f"Task-Cycle 연결 해제 실패: {str(e)}")
+
+
+@router.get("/{task_id}/available-cycles")
+async def get_available_cycles_for_task(task_id: int, db: Session = Depends(get_db)):
+    """Task에 연결 가능한 Zephyr 테스트 사이클 목록 조회 (아직 연결되지 않은 사이클들)"""
+    try:
+        from models.database_models import TaskCycleLink, ZephyrTestCycle, ZephyrProject, Task
+        from sqlalchemy import and_, not_, exists
+        
+        # Task 존재 확인
+        task = task_service.get_task_by_id(db, task_id)
+        if not task:
+            raise HTTPException(status_code=404, detail="작업을 찾을 수 없습니다.")
+        
+        # Task의 프로젝트 정보 조회
+        # Task 모델에서 project_id를 통해 프로젝트 정보를 가져와야 함
+        # 현재는 모든 사이클을 반환하되, 이미 연결된 사이클은 제외
+        
+        # 이미 연결된 사이클 ID 목록 조회
+        linked_cycle_ids = db.query(TaskCycleLink.zephyr_cycle_id).filter(
+            and_(
+                TaskCycleLink.task_id == task_id,
+                TaskCycleLink.is_active == True
+            )
+        ).subquery()
+        
+        # 연결되지 않은 모든 사이클 조회
+        available_cycles = db.query(ZephyrTestCycle).filter(
+            not_(ZephyrTestCycle.id.in_(linked_cycle_ids))
+        ).all()
+        
+        # 응답 데이터 구성
+        result = []
+        for cycle in available_cycles:
+            # ZephyrProject 정보 조회
+            project_key = "N/A"
+            if cycle.zephyr_project:
+                project_key = cycle.zephyr_project.project_key
+            
+            cycle_data = {
+                "id": str(cycle.id),
+                "zephyr_cycle_id": cycle.zephyr_cycle_id,
+                "cycle_name": cycle.cycle_name,
+                "description": cycle.description or "",
+                "version": cycle.version or "N/A",
+                "environment": cycle.environment or "N/A",
+                "build": cycle.build or "N/A",
+                "status": cycle.status,
+                "project_key": project_key,
+                "created_by": cycle.created_by or "N/A",
+                "assigned_to": cycle.assigned_to or "N/A",
+                "start_date": cycle.start_date.isoformat() if cycle.start_date else "N/A",
+                "end_date": cycle.end_date.isoformat() if cycle.end_date else "N/A",
+                "total_test_cases": cycle.total_test_cases,
+                "executed_test_cases": cycle.executed_test_cases,
+                "passed_test_cases": cycle.passed_test_cases,
+                "failed_test_cases": cycle.failed_test_cases,
+                "blocked_test_cases": cycle.blocked_test_cases,
+                "created_at": cycle.created_at.isoformat() if cycle.created_at else "N/A",
+                "last_sync": cycle.last_sync.isoformat() if cycle.last_sync else "N/A"
+            }
+            result.append(cycle_data)
+        
+        logger.info(f"Task {task_id}에 연결 가능한 사이클 개수: {len(result)}")
+        return result
+        
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"연결 가능한 사이클 조회 오류: {str(e)}")
+        raise HTTPException(status_code=500, detail=f"연결 가능한 사이클 조회 실패: {str(e)}")
