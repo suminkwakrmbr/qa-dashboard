@@ -304,7 +304,7 @@ def sync_project(project_key: str):
 
 @st.dialog("동기화 진행 상황")
 def sync_progress_modal(project_key: str):
-    """동기화 진행 상황 모달 - 심플하고 고급스러운 디자인"""
+    """동기화 진행 상황"""
     # 동기화 상태 조회
     sync_status = get_sync_status(project_key)
     
@@ -328,7 +328,7 @@ def sync_progress_modal(project_key: str):
         import re
         message = re.sub(r'\s+', ' ', message)
     
-    # 상태별 아이콘 설정 (심플하게)
+    # 상태별 아이콘 설정
     if status == "starting":
         status_icon = "●"
         status_text = "시작 중"
@@ -354,7 +354,7 @@ def sync_progress_modal(project_key: str):
         status_icon = "●"
         status_text = "진행 중"
     
-    # 심플한 상태 표시
+    # 상태 표시
     if status == "completed":
         st.markdown(f"**{status_icon} {status_text}**")
         if total_issues > 0:
@@ -371,11 +371,11 @@ def sync_progress_modal(project_key: str):
         st.markdown(f"**{status_icon} {status_text}**")
         st.markdown(f"{message}")
     
-    # 심플한 진행률 표시
+    # 진행률 표시
     st.progress(progress / 100.0)
     st.markdown(f"**진행률:** {progress}%")
     
-    # 상세 정보 표시 (심플하게)
+    # 상세 정보 표시
     if total_issues > 0 and status == "processing":
         st.markdown(f"**처리 중:** {processed_issues}/{total_issues} 이슈")
     
@@ -392,35 +392,12 @@ def sync_progress_modal(project_key: str):
         
         col1, col2, col3 = st.columns([1, 1, 1])
         with col2:
-            # 고유한 key 생성을 위해 더 정확한 타임스탬프와 랜덤 값 사용
-            import random
-            unique_id = f"{int(time.time() * 1000)}_{random.randint(1000, 9999)}"
-            
-            if st.button("확인", key=f"sync_complete_{project_key}_{unique_id}", use_container_width=True, type="primary"):
-                # 모달 닫기 - 모든 관련 세션 상태 제거
-                if f"show_sync_modal_{project_key}" in st.session_state:
-                    del st.session_state[f"show_sync_modal_{project_key}"]
-                if f"close_sync_modal_{project_key}" in st.session_state:
-                    del st.session_state[f"close_sync_modal_{project_key}"]
-                st.cache_data.clear()
+            if st.button("확인", key=f"sync_complete_{project_key}", use_container_width=True, type="primary"):
                 st.rerun()
 
 def monitor_sync_progress(project_key: str):
     """동기화 진행 상황 실시간 모니터링 (실제 모달)"""
-    # 세션 상태에 모달 표시 플래그 설정
-    st.session_state[f"show_sync_modal_{project_key}"] = True
-    
-    # 모달 표시
-    if st.session_state.get(f"show_sync_modal_{project_key}", False) and not st.session_state.get(f"close_sync_modal_{project_key}", False):
-        sync_progress_modal(project_key)
-    
-    # 확인 버튼 클릭 시 모달 닫기
-    if st.session_state.get(f"close_sync_modal_{project_key}", False):
-        # 모달 관련 플래그 모두 제거
-        if f"show_sync_modal_{project_key}" in st.session_state:
-            del st.session_state[f"show_sync_modal_{project_key}"]
-        if f"close_sync_modal_{project_key}" in st.session_state:
-            del st.session_state[f"close_sync_modal_{project_key}"]
+    sync_progress_modal(project_key)
 
 def show_project_statistics():
     """프로젝트 통계"""
