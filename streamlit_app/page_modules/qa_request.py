@@ -209,7 +209,7 @@ def show_create_qa_request():
         # 기획/디자인 문서 링크 (고정 3개 필드)
         st.markdown("**기획/디자인 문서**")
         
-        # 문서 링크 필드들 (고정 3개)
+        # 문서 링크 필드
         document_links = []
         
         for i in range(3):
@@ -451,7 +451,7 @@ def show_qa_request_list():
         </style>
         """, unsafe_allow_html=True)
         
-        # 헤더 행 (QA담당자 컬럼 추가) - 컬럼 비율 정확히 맞춤
+        # 헤더
         header_html = """
         <div class="qa-table-header">
             <div style="flex: 0.8; color: #e2e8f0; font-weight: 600; text-align: center;">ID</div>
@@ -527,36 +527,36 @@ def show_qa_request_list():
             row_cols = st.columns([0.8, 2.5, 1, 1, 1, 1, 1.2, 0.8])
             
             with row_cols[0]:
-                # ID 표시 (중앙 정렬)
+                # ID
                 st.markdown(f'<div style="padding: 12px 8px; color: #667eea; font-weight: bold; text-align: center; display: flex; align-items: center; justify-content: center; height: 100%;">QA-{req["id"]:04d}</div>', unsafe_allow_html=True)
             
             with row_cols[1]:
-                # 제목 표시 (왼쪽 정렬, 헤더와 일치 - 패딩 추가)
+                # 제목 표시
                 st.markdown(f'<div style="padding: 12px 8px; padding-left: 15px; color: #e2e8f0; font-size: 0.95rem; display: flex; align-items: center; height: 100%;">{title_display}</div>', unsafe_allow_html=True)
             
             with row_cols[2]:
-                # 상태 표시 (중앙 정렬)
+                # 상태 표시
                 st.markdown(f'<div style="padding: 12px 8px; text-align: center; display: flex; align-items: center; justify-content: center; height: 100%;">{status_display}</div>', unsafe_allow_html=True)
             
             with row_cols[3]:
-                # 우선순위 표시 (중앙 정렬)
+                # 우선순위 표시
                 st.markdown(f'<div style="padding: 12px 8px; text-align: center; display: flex; align-items: center; justify-content: center; height: 100%;">{priority_display}</div>', unsafe_allow_html=True)
             
             with row_cols[4]:
-                # 요청자 정보 표시 (중앙 정렬)
+                # 요청자 정보 표시
                 st.markdown(f'<div style="padding: 12px 8px; color: #cbd5e0; font-size: 0.9rem; text-align: center; display: flex; align-items: center; justify-content: center; height: 100%;">{requester_display}</div>', unsafe_allow_html=True)
             
             with row_cols[5]:
-                # QA담당자 표시 (중앙 정렬)
+                # QA담당자 표시
                 qa_color = '#10b981' if qa_assignee else '#6c757d'
                 st.markdown(f'<div style="padding: 12px 8px; color: {qa_color}; font-size: 0.9rem; text-align: center; display: flex; align-items: center; justify-content: center; height: 100%;">{qa_assignee_display}</div>', unsafe_allow_html=True)
             
             with row_cols[6]:
-                # 요청일 표시 (중앙 정렬)
+                # 요청일 표시
                 st.markdown(f'<div style="padding: 12px 8px; color: #a0aec0; font-size: 0.9rem; text-align: center; display: flex; align-items: center; justify-content: center; height: 100%;">{req["request_date"]}</div>', unsafe_allow_html=True)
             
             with row_cols[7]:
-                # 상세보기 버튼 (Streamlit 네이티브 버튼만 사용)
+                # 상세보기 버튼
                 if st.button("👁️ 보기", key=f"detail_btn_{req['id']}", 
                            type="primary", use_container_width=True,
                            help=f"QA-{req['id']:04d} 상세보기"):
@@ -564,7 +564,7 @@ def show_qa_request_list():
                     st.session_state.qa_current_view = 'detail'
                     st.rerun()
             
-            # 행 구분선
+            # 행 구분
             st.markdown('<div style="border-bottom: 1px solid #4a5568; margin: 0.5rem 0;"></div>', unsafe_allow_html=True)
     
     else:
@@ -635,11 +635,11 @@ def show_qa_request_stats():
 def get_qa_request_status_color(status):
     """QA 요청서 상태에 따른 색상 반환"""
     colors = {
-        "대기": "#6c757d",      # 회색
-        "진행중": "#007bff",    # 파란색
-        "완료": "#28a745",      # 초록색
-        "보류": "#ffc107",      # 노란색
-        "취소": "#dc3545"       # 빨간색
+        "대기": "#6c757d",
+        "진행중": "#007bff",
+        "완료": "#28a745",
+        "보류": "#ffc107",
+        "취소": "#dc3545"
     }
     return colors.get(status, "#6c757d")
 
@@ -649,10 +649,9 @@ def show_qa_request_detail():
         st.error("선택된 요청서가 없습니다.")
         return
     
-    # 요청서 상세 페이지에서 사이드바 완전 제거
     st.markdown("""
     <style>
-    /* 사이드바 완전 숨김 */
+    /* 사이드바 숨김 */
     .css-1d391kg, .css-1lcbmhc, .css-1y4p8pa, [data-testid="stSidebar"] {
         display: none !important;
     }
@@ -678,7 +677,7 @@ def show_qa_request_detail():
         st.error("요청서를 찾을 수 없습니다.")
         return
     
-    # 상단 네비게이션 - 축소된 버튼
+    # 상단 네비게이션
     nav_col1, nav_col2, nav_col3 = st.columns([1, 4, 1])
     
     with nav_col1:
@@ -689,21 +688,21 @@ def show_qa_request_detail():
     
     st.markdown("---")
     
-    # 상태별 색상 정의
+    # 상태별 색상
     status_colors = {
-        "대기": "#6c757d",      # 회색
-        "진행중": "#007bff",    # 파란색
-        "완료": "#28a745",      # 초록색
-        "보류": "#ffc107",      # 노란색
-        "취소": "#dc3545"       # 빨간색
+        "대기": "#6c757d",
+        "진행중": "#007bff",
+        "완료": "#28a745",
+        "보류": "#ffc107",
+        "취소": "#dc3545"
     }
     
-    # 우선순위별 색상 정의
+    # 우선순위별 색
     priority_colors = {
-        "낮음": "#28a745",      # 초록색
-        "보통": "#007bff",      # 파란색
-        "높음": "#ffc107",      # 노란색
-        "긴급": "#dc3545"       # 빨간색
+        "낮음": "#28a745",
+        "보통": "#007bff", 
+        "높음": "#ffc107",
+        "긴급": "#dc3545"
     }
     
     status = selected_request.get('status', '대기')
@@ -711,7 +710,7 @@ def show_qa_request_detail():
     status_color = status_colors.get(status, "#6c757d")
     priority_color = priority_colors.get(priority, "#007bff")
     
-    # 헤더 섹션 - 축소된 크기
+    # 헤더 섹션
     st.markdown(f"""
     <div style="background: linear-gradient(135deg, #2d3748 0%, #1a202c 100%); 
                 padding: 1.5rem; border-radius: 12px; margin-bottom: 1.5rem; 
@@ -739,7 +738,7 @@ def show_qa_request_detail():
     with info_col:
         st.markdown("### 📋 기본 정보")
         
-        # QA담당자 정보 처리
+        # QA 담당자 정보 처리
         qa_assignee = selected_request.get('qa_assignee', None)
         qa_assignee_display = qa_assignee if qa_assignee else '미지정'
         qa_assignee_color = '#10b981' if qa_assignee else '#6c757d'
@@ -873,7 +872,7 @@ def show_qa_request_detail():
     </div>
     """, unsafe_allow_html=True)
     
-    # 테스트 범위 (있는 경우)
+    # 테스트 범위
     if selected_request.get('test_scope'):
         st.markdown("### 🎯 테스트 범위")
         st.markdown(f"""
@@ -882,7 +881,7 @@ def show_qa_request_detail():
         </div>
         """, unsafe_allow_html=True)
     
-    # 예상 이슈 (있는 경우)
+    # 예상 이슈
     if selected_request.get('expected_issues'):
         st.markdown("### ⚠️ 예상 이슈 및 주의사항")
         st.markdown(f"""
@@ -891,7 +890,7 @@ def show_qa_request_detail():
         </div>
         """, unsafe_allow_html=True)
     
-    # 관련 자료 (있는 경우)
+    # 관련 자료
     if selected_request.get('document_links') or selected_request.get('related_tasks'):
         st.markdown("### 🔗 관련 자료")
         
@@ -912,11 +911,10 @@ def show_qa_request_detail():
                         ticket_key = task.split(' - ')[0].strip()
                         task_description = task.split(' - ', 1)[1].strip()
                         
-                        # JIRA 링크 생성 (기본 JIRA URL 사용)
+                        # JIRA 링크 생성
                         jira_url = f"https://dramancompany.atlassian.net/browse/{ticket_key}"
                         st.markdown(f"• [{ticket_key}]({jira_url}) - {task_description}")
                     else:
-                        # 티켓 키가 명확하지 않은 경우 그대로 표시
                         st.write(f"• {task}")
     
     # 화면 하단 삭제 기능
@@ -962,7 +960,7 @@ def show_delete_confirmation_dialog(selected_request):
     
     st.markdown('<div style="height: 1rem;"></div>', unsafe_allow_html=True)
     
-    # 버튼들
+    # 버튼
     col1, col2 = st.columns(2)
     
     with col1:
@@ -981,10 +979,8 @@ def show_delete_confirmation_dialog(selected_request):
                     st.session_state.show_delete_modal = False
                     st.rerun()
                 else:
-                    # 한줄 오류 메시지
                     st.markdown('<div style="text-align: center; color: #dc3545; font-weight: 600; margin-top: 1rem;">❌ 삭제 중 오류가 발생했습니다.</div>', unsafe_allow_html=True)
             else:
-                # 한줄 오류 메시지
                 st.markdown('<div style="text-align: center; color: #dc3545; font-weight: 600; margin-top: 1rem;">❌ 비밀번호가 올바르지 않습니다.</div>', unsafe_allow_html=True)
     
     with col2:
@@ -995,20 +991,20 @@ def show_delete_confirmation_dialog(selected_request):
 def get_qa_request_status_color(status):
     """QA 요청서 상태에 따른 색상 반환"""
     colors = {
-        "대기": "#6c757d",      # 회색
-        "진행중": "#007bff",    # 파란색
-        "완료": "#28a745",      # 초록색
-        "보류": "#ffc107",      # 노란색
-        "취소": "#dc3545"       # 빨간색
+        "대기": "#6c757d",
+        "진행중": "#007bff",
+        "완료": "#28a745",
+        "보류": "#ffc107",
+        "취소": "#dc3545"
     }
     return colors.get(status, "#6c757d")
 
 def get_qa_request_priority_color(priority):
     """QA 요청서 우선순위에 따른 색상 반환"""
     colors = {
-        "낮음": "#28a745",      # 초록색
-        "보통": "#007bff",      # 파란색
-        "높음": "#ffc107",      # 노란색
-        "긴급": "#dc3545"       # 빨간색
+        "낮음": "#28a745",
+        "보통": "#007bff",
+        "높음": "#ffc107",
+        "긴급": "#dc3545"
     }
     return colors.get(priority, "#007bff")

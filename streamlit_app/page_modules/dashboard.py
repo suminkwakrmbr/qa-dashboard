@@ -37,7 +37,7 @@ def show_dashboard_home():
     # 배포날짜 공지 영역
     deployment_notice = get_active_deployment_notice()
     if deployment_notice:
-        # 날짜 파싱 (예: "2025년 01월 15일 14:30" 형식)
+        # 날짜 파싱
         deployment_date_str = deployment_notice.get('deployment_date', '')
         
         # 날짜에서 연도, 월, 일 추출
@@ -351,7 +351,7 @@ def show_dashboard_home():
             for col in display_columns:
                 if col not in task_df.columns:
                     if col == 'qa_status':
-                        task_df[col] = '미시작'  # qa_status 기본값
+                        task_df[col] = '미시작'
                     else:
                         task_df[col] = 'N/A'
             
@@ -360,9 +360,6 @@ def show_dashboard_home():
             # 지라 키를 클릭 가능한 링크로 변환
             if 'jira_key' in display_df.columns:
                 display_df['jira_key'] = display_df['jira_key'].apply(create_jira_link)
-            
-            # 지라 상태는 원본 그대로 표시 (처리 상태)
-            # 지라에서 받아온 상태를 변경하지 않음
             
             # 검수 상태만 이모지 추가 (작업관리에서 설정한 값)
             qa_status_emoji = {
@@ -382,7 +379,7 @@ def show_dashboard_home():
             # HTML 렌더링을 위해 st.markdown 사용
             st.markdown("**📋 최근 동기화된 작업 목록**")
             
-            # 테이블 형태로 HTML 생성 (다크 테마에 맞는 고급스러운 색상)
+            # 테이블 형태로 HTML 생성
             html_table = "<table style='width: 100%; border-collapse: collapse; background-color: #1e1e1e; border-radius: 8px; overflow: hidden;'>"
             html_table += "<tr style='background-color: #2d3748; font-weight: bold;'>"
             for col in display_df.columns:
@@ -390,7 +387,7 @@ def show_dashboard_home():
             html_table += "</tr>"
             
             for i, (_, row) in enumerate(display_df.iterrows()):
-                # 교대로 다른 배경색 적용 (어두운 톤)
+                # 교대로 다른 배경색 적용
                 bg_color = "#2d3748" if i % 2 == 0 else "#1a202c"
                 html_table += f"<tr style='background-color: {bg_color}; border-bottom: 1px solid #4a5568; transition: background-color 0.2s;' onmouseover='this.style.backgroundColor=\"#374151\"' onmouseout='this.style.backgroundColor=\"{bg_color}\"'>"
                 for col in display_df.columns:

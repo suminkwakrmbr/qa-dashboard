@@ -50,7 +50,7 @@ def check_zephyr_connection_status():
         st.warning("⚠️ Zephyr API 토큰이 설정되지 않았습니다. .env 파일에서 ZEPHYR_API_TOKEN을 설정해주세요.")
         return False
     
-    # 간단한 연결 상태 표시
+    # 연결 상태 표시
     if 'zephyr_connection_status' not in st.session_state:
         with st.spinner("Zephyr 연결 확인 중..."):
             try:
@@ -192,7 +192,7 @@ def show_project_test_cases(project):
             st.caption(f"🕒 마지막 동기화: {last_sync_time}")
         
         if test_cases:
-            # 간단한 필터
+            # 필터
             col1, col2, col3 = st.columns([2, 1, 1])
             with col1:
                 search_term = st.text_input("🔍 검색", placeholder="테스트 케이스 제목 검색...")
@@ -216,9 +216,9 @@ def show_project_test_cases(project):
             col1, col2 = st.columns([8, 2])
             with col2:
                 sort_options = ["생성순", "동기화시간순", "제목순", "상태순", "우선순위순"]
-                sort_by = st.selectbox("🔄 정렬", sort_options, index=0)  # 기본값을 생성순으로 설정
+                sort_by = st.selectbox("🔄 정렬", sort_options, index=0)  # 기본값 : 생성순으로 설정
                 
-                # 생성 날짜 추출 함수
+                # 생성 날짜 추출
                 def extract_created_date(test_case):
                     # 여러 필드에서 생성 날짜 찾기
                     possible_date_fields = [
@@ -251,7 +251,7 @@ def show_project_test_cases(project):
                             except Exception:
                                 continue
                     
-                    # 날짜를 찾지 못한 경우 기본값 반환 (아주 오래된 날짜)
+                    # 날짜를 찾지 못한 경우 기본값 반환
                     from datetime import datetime
                     return datetime(1900, 1, 1)
                 
@@ -312,10 +312,10 @@ def _perform_sync(project_id, project_name, silent=False):
         from streamlit_app.api.client import get_zephyr_test_cases
         import datetime
         
-        # 캐시 클리어하여 최신 데이터 가져오기
+        # 캐시 클리어
         st.cache_data.clear()
         
-        # 최신 테스트 케이스 조회 (최대 10000개 데이터 가져오기)
+        # 최신 테스트 케이스 조회 (최대 10000개)
         test_cases = get_zephyr_test_cases(project_id, limit=10000)
         
         if test_cases and isinstance(test_cases, list):
@@ -405,7 +405,7 @@ def show_clean_test_case_card(test_case, index):
         except:
             formatted_date = created_on
     
-    # 깔끔한 카드 디자인 (Streamlit 네이티브)
+    # 카드 디자인 (streamlit 네이티브)
     with st.container():
         # 카드 스타일 적용
         st.markdown("""

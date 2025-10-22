@@ -60,7 +60,7 @@ def show_zephyr_connection_settings():
                         
                         start_time = time.time()
                         
-                        # Zephyr Scale 연결 테스트 - 성공한 엔드포인트를 우선 시도
+                        # Zephyr Scale 연결 테스트
                         test_urls = [
                             "https://api.zephyrscale.smartbear.com/v2/projects",  # Cloud API (성공 확인됨)
                             f"{zephyr_server}/rest/atm/1.0/project",  # Zephyr Scale Server
@@ -72,7 +72,7 @@ def show_zephyr_connection_settings():
                         
                         for i, test_url in enumerate(test_urls):
                             try:
-                                # Zephyr Scale API는 Bearer 토큰 방식 사용
+                                # Bearer 토큰 방식 사용
                                 headers = {
                                     "Authorization": f"Bearer {zephyr_api_token}",
                                     "Accept": "application/json"
@@ -199,7 +199,7 @@ def show_zephyr_connection_settings():
                     
                     # Zephyr Scale 연결 테스트 - 성공한 엔드포인트를 우선 시도
                     test_urls = [
-                        "https://api.zephyrscale.smartbear.com/v2/projects",  # Cloud API (성공 확인됨)
+                        "https://api.zephyrscale.smartbear.com/v2/projects",  # Cloud API
                         f"{zephyr_server}/rest/atm/1.0/project",  # Zephyr Scale Server
                         f"{zephyr_server}/rest/tests/1.0/project"  # 대안 엔드포인트
                     ]

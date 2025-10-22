@@ -18,11 +18,9 @@ logger = logging.getLogger(__name__)
 def show_qa_assistant():
     """QA AI 어시스턴트 페이지 - 채팅 형식"""
     
-    # CSS 스타일 완전 제거 - 기본 Streamlit 컴포넌트만 사용
-    
     st.title("💬 QA AI 어시스턴트")
     
-    # API 키 확인
+    # API Key 확인
     custom_api_key = os.getenv('CUSTOM_GPT_API_KEY', '')
     if not custom_api_key:
         st.error("❌ API 키가 설정되지 않았습니다.")
@@ -42,16 +40,15 @@ def show_qa_assistant():
         
         # 채팅 히스토리 표시
         for i, chat in enumerate(st.session_state.qa_chat_history):
-            # 사용자 메시지 (우측 정렬)
+            # 사용자 메시지
             col1, col2, col3 = st.columns([1, 1, 2])
             with col3:
                 st.markdown(f"<div style='text-align: right; font-size: 0.8rem; color: #666; margin-bottom: 5px;'>👤 사용자 ({chat['timestamp']})</div>", unsafe_allow_html=True)
                 
-                # 첨부 파일이 있으면 먼저 표시 (우측 정렬)
+                # 첨부 파일이 있으면 먼저 표시
                 if chat.get('attachments'):
                     for attachment in chat['attachments']:
                         if attachment['type'] == 'image':
-                            # 이미지를 우측 정렬로 표시
                             st.markdown(f"""
                             <div style='text-align: right; margin-bottom: 10px;'>
                                 <div style='display: inline-block; max-width: 80%;'>
@@ -65,7 +62,7 @@ def show_qa_assistant():
                             </div>
                             """, unsafe_allow_html=True)
                 
-                # 사용자 메시지 표시 (텍스트 길이에 맞게, 우측 정렬)
+                # 사용자 메시지 표시
                 import html
                 escaped_user_message = html.escape(chat['user_message']).replace('\n', '<br>')
                 st.markdown(f"""
@@ -78,12 +75,12 @@ def show_qa_assistant():
                 </div>
                 """, unsafe_allow_html=True)
             
-            # AI 응답 (좌측 정렬)
+            # AI 응답
             col1, col2, col3 = st.columns([2, 1, 1])
             with col1:
                 st.markdown("<div style='font-size: 0.8rem; color: #666; margin-bottom: 5px;'>🤖 AI 어시스턴트</div>", unsafe_allow_html=True)
                 
-                # AI 응답 표시 (텍스트 길이에 맞게, 좌측 정렬)
+                # AI 응답 표시
                 import html
                 escaped_ai_response = html.escape(chat['ai_response']).replace('\n', '<br>')
                 st.markdown(f"""
@@ -172,7 +169,7 @@ def send_message(message: str, uploaded_files: List = None):
                         attachments.append({
                             'type': 'image',
                             'name': file.name,
-                            'data': img_base64  # base64 문자열로 저장
+                            'data': img_base64
                         })
             
             # AI 응답 생성 (이미지 포함)
@@ -188,7 +185,7 @@ def send_message(message: str, uploaded_files: List = None):
             
             st.session_state.qa_chat_history.append(chat_entry)
             
-            # 페이지 새로고침 (동적 키로 인해 입력창이 자동 초기화됨)
+            # 페이지 새로고침
             st.rerun()
             
     except Exception as e:

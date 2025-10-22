@@ -11,7 +11,6 @@ import logging
 
 from streamlit_app.api.client import get_api_base_url, get_sync_status, get_jira_project_issues, sync_jira_project
 
-# 로거 설정
 logger = logging.getLogger(__name__)
 
 def get_current_selection_count(project_key: str, issues: List[Dict[str, Any]]) -> int:
@@ -19,7 +18,7 @@ def get_current_selection_count(project_key: str, issues: List[Dict[str, Any]]) 
     if not issues:
         return 0
     
-    # 세션 상태에서 선택된 키들만 직접 카운트 (더 정확함)
+    # 세션 상태에서 선택된 키들만 직접 카운트
     selected_count = 0
     for key in st.session_state.keys():
         if key.startswith(f"issue_select_{project_key}_") and st.session_state[key]:
@@ -565,7 +564,7 @@ def show_sync_detail_page(project_key: str):
     
     with col2:
         if st.button("전체 선택", use_container_width=True, key=f"select_all_btn_{project_key}"):
-            # 모든 이슈 선택 (한 번에 처리)
+            # 모든 이슈 선택
             for issue in issues:
                 issue_key = issue.get('key', '')
                 if issue_key:
@@ -574,13 +573,13 @@ def show_sync_detail_page(project_key: str):
     
     with col3:
         if st.button("선택 해제", use_container_width=True, key=f"deselect_all_btn_{project_key}"):
-            # 모든 이슈 선택 해제 (한 번에 처리)
+            # 모든 이슈 선택 해제
             keys_to_remove = [key for key in st.session_state.keys() if key.startswith(f"issue_select_{project_key}_")]
             for key in keys_to_remove:
                 del st.session_state[key]
             st.rerun()
     
-    # 전체 선택 체크박스 클릭 시 처리 (최적화)
+    # 전체 선택 체크박스 클릭 시 처리
     previous_select_all = st.session_state.get(f"previous_select_all_{project_key}", False)
     
     if select_all != previous_select_all:

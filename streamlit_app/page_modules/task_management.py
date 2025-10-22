@@ -27,7 +27,7 @@ def show_task_management():
     
     # 페이지 상태 관리
     if 'task_page_state' not in st.session_state:
-        st.session_state.task_page_state = 'list'  # 'list' 또는 'detail'
+        st.session_state.task_page_state = 'list'
     
     if 'selected_task_id' not in st.session_state:
         st.session_state.selected_task_id = None
@@ -145,7 +145,7 @@ def show_task_list():
             end_idx = min(start_idx + items_per_page, len(tasks))
             page_tasks = tasks[start_idx:end_idx]
         
-        # 표시 정보 (간단하게)
+        # 표시 정보
         if items_per_page != "전체":
             start_num = current_page * items_per_page + 1
             end_num = min((current_page + 1) * items_per_page, len(tasks))
@@ -559,7 +559,6 @@ def show_task_detail_card(task):
                 key=f"edit_memo_{task_id}"
             )
         with col2:
-            # 텍스트 영역과 버튼 정렬을 위한 여백 추가
             st.markdown("<br>", unsafe_allow_html=True)
             if st.button("메모 수정", key=f"update_memo_{task_id}"):
                 if edited_memo.strip():
@@ -592,7 +591,6 @@ def show_task_detail_card(task):
                 placeholder="메모를 입력하세요..."
             )
         with col2:
-            # 텍스트 영역과 버튼 정렬을 위한 여백 추가
             st.markdown("<br>", unsafe_allow_html=True)
             if st.button("메모 추가", key=f"add_memo_{task_id}"):
                 if new_memo.strip():
